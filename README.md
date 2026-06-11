@@ -16,8 +16,9 @@
 
 修改文件 /system/dashboard-ui/index.html (Docker版,其他类似),在`</body>`前添加如下标签,多选一
 
-1. 直接下载`ede.js`到 index.html 同级目录下,优先使用本地文件较为稳定
+1. 直接下载构建产物到 index.html 同级目录下,优先使用本地文件较为稳定
 ```js
+// 构建: npm run build，产物在 dist/ 目录
 // <script src="ede.js" charset="utf-8" defer></script>
 <script src="ede.js" charset="utf-8"></script>
 ```
@@ -129,6 +130,17 @@ windows 下载 JDK 可使用[Apktool](https://apktool.org) 进行解包和打包
 4. NewUI 以来的一些更改和注意事项, [CHANGLOG](docs/CHANGLOG.md) 或 [PR#60](https://github.com/9channel/dd-danmaku/pull/60)
 
 **首次播放时请检查当前弹幕信息是否正确匹配,若匹配错误请尝试手动匹配**
+
+## 开发/构建
+
+本项目已模块化改造，源码位于 `src/`，构建说明见 [docs/refactor/BUILD.md](docs/refactor/BUILD.md)。
+
+```bash
+npm install
+npm run build          # 产出 dist/ede.js、ede.min.js、ede.user.js 等
+npm run build:android9 # Android 9+ 兼容
+npm run build:android7 # Android 7+ 兼容
+```
 
 ## 参考项目(欢迎顺手点亮一颗⭐️)
 

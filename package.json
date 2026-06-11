@@ -6,17 +6,25 @@
   "directories": {
     "doc": "docs"
   },
-  "dependencies": {},
   "devDependencies": {
     "@babel/cli": "^7.28.6",
     "@babel/core": "^7.28.6",
     "@babel/preset-env": "^7.28.6",
-    "cross-env": "^10.1.0"
+    "@rollup/plugin-babel": "^7.0.0",
+    "@rollup/plugin-commonjs": "^29.0.2",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-terser": "^1.0.0",
+    "cross-env": "^10.1.0",
+    "rollup": "^2.80.0"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build:android9": "cross-env BROWSERSLIST_ENV=android9 babel ede.js --out-file dist/ede.android9.js",
-    "build:android7": "cross-env BROWSERSLIST_ENV=android7 babel ede.js --out-file dist/ede.android7.js"
+    "build": "rollup -c",
+    "build:dev": "rollup -c --environment BUILD:dev",
+    "build:prod": "rollup -c --environment BUILD:prod",
+    "build:android9": "npm run build && cross-env BROWSERSLIST_ENV=android9 rollup -c --environment BUILD:android9",
+    "build:android7": "npm run build && cross-env BROWSERSLIST_ENV=android7 rollup -c --environment BUILD:android7",
+    "build:all": "npm run build && npm run build:android9 && npm run build:android7"
   },
   "repository": {
     "type": "git",

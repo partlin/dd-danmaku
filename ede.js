@@ -698,6 +698,10 @@
         if (lsGetItem(lsKeys.osdHeaderClockEnable.id)) {
             addHeaderClock();
         }
+        // 播放界面右下角弹幕信息：OSD 显示时刷新，解决新视频播放时 .videoOsdSecondaryText 尚未渲染导致未展示的问题
+        if (lsGetItem(lsKeys.osdTitleEnable.id)) {
+            appendvideoOsdDanmakuInfo();
+        }
     }
 
     function onVideoOsdHide(e) {
@@ -849,6 +853,23 @@
         }
     }
 
+    /**
+     * 根据 episodeId 在 bangumi.episodes 中的下标得到 bgmEpisodeIndex（与 Bangumi API data[] 顺序一致）
+     * 优先用 episodeId 精确匹配；否则用 animeId 与 episodeId 的关系（episodeId = animeId*10000+集数）推导正片集数再查找
+     */
+    function resolveBgmEpisodeIndex(episodeId, animeId, danDanPlayBangumi) {
+        if (!danDanPlayBangumi?.episodes?.length) return -1;
+        const episodes = danDanPlayBangumi.episodes;
+        let idx = episodes.findIndex((ep) => ep.episodeId === episodeId);
+        if (idx >= 0) return idx;
+        const offset = episodeId - animeId * 10000;
+        if (offset >= 1 && offset < 9000) {
+            idx = episodes.findIndex((ep) => String(ep.episodeNumber) === String(offset));
+            if (idx >= 0) return idx;
+        }
+        return -1;
+    }
+
     async function getEpisodeBangumiRel() {
         const episode_info = window.ede.episode_info;
         const _bangumi_key = lsLocalKeys.bangumiEpInfoPrefix + episode_info.episodeId;
@@ -860,13 +881,24 @@
         let subjectId = bangumiInfoLs ? bangumiInfoLs.subjectId : null;
         let bangumiUrl = bangumiInfoLs ? bangumiInfoLs.bangumiUrl : null;
         const animeId = episode_info.animeId;
-        if (!subjectId) {
+        if (subjectId && bangumiInfoLs?.bgmEpisodeIndex != null) {
+            episode_info.bgmEpisodeIndex = bangumiInfoLs.bgmEpisodeIndex;
+        }
+        if (!subjectId || episode_info.bgmEpisodeIndex == null) {
             if (!animeId) { throw new Error('未获取到 animeId'); }
             const danDanPlayBangumiRes = await fetchJson(dandanplayApi.getBangumi(animeId));
-            episode_info.bgmEpisodeIndex = offsetBgmEpisodeIndex(episode_info.bgmEpisodeIndex, danDanPlayBangumiRes.bangumi);
-            bangumiUrl = danDanPlayBangumiRes.bangumi.bangumiUrl;
-            if (!bangumiUrl) { throw new Error('未请求到 bangumiUrl'); }
-            subjectId = parseInt(bangumiUrl.match(/\/(\d+)$/)[1]);
+            const bangumi = danDanPlayBangumiRes.bangumi;
+            const episodeId = episode_info.episodeId;
+            const resolved = resolveBgmEpisodeIndex(episodeId, animeId, bangumi);
+            if (resolved < 0) {
+                throw new Error(`无法从 episodeId=${episodeId} animeId=${animeId} 解析 Bangumi 章节下标`);
+            }
+            episode_info.bgmEpisodeIndex = resolved;
+            if (!subjectId) {
+                bangumiUrl = bangumi.bangumiUrl;
+                if (!bangumiUrl) { throw new Error('未请求到 bangumiUrl'); }
+                subjectId = parseInt(bangumiUrl.match(/\/(\d+)$/)[1]);
+            }
         }
         const episodeIndex = episode_info ? episode_info.episodeIndex : null;
         const bgmEpisodeIndex = episode_info ? episode_info.bgmEpisodeIndex : null;
@@ -874,19 +906,6 @@
         window.ede.bangumiInfo = bangumiInfo;
         localStorage.setItem(bangumiInfo._bangumi_key, JSON.stringify(bangumiInfo));
         return bangumiInfo;
-    }
-
-    function offsetBgmEpisodeIndex(currentBgmEpisodeIndex, danDanPlayBangumi) {
-        if (!danDanPlayBangumi) {
-            return currentBgmEpisodeIndex;
-        }
-        let bangumiEp = danDanPlayBangumi.episodes[currentBgmEpisodeIndex];
-        if (!bangumiEp) {
-            console.log(`未匹配到 danDanPlayBangumi 番剧集数,剧集不为第一季,尝试切换接口数据匹配返回修正后的 bgmEpisodeIndex`);
-            return danDanPlayBangumi.episodes.findIndex(ep => ep.episodeNumber == currentBgmEpisodeIndex + 1);
-        } else {
-            return currentBgmEpisodeIndex;
-        }
     }
 
     async function putBangumiEpStatus(token) {
@@ -1596,9 +1615,8 @@
         // 有赛季缓存时优先用赛季缓存（手动匹配后写入的 _anime_season_rel_*），避免哈希+智能匹配选错
         const animaRes = await lsSeasonSearchEpisodes(_season_key, episode, selectedApiConfig.prefix);
         if (animaRes && animaRes.animaInfo && animaRes.animaInfo.animes.length > 0) {
-            const bgmEpisodeIndex = animaRes.newEpisode - 1;
             console.log(`[自动匹配] 命中赛季缓存，直接使用`);
-            return { animeOriginalTitle: '', animaInfo: animaRes.animaInfo, bgmEpisodeIndex };
+            return { animeOriginalTitle: '', animaInfo: animaRes.animaInfo };
         }
 
         // 尝试 tmdbId 匹配（季度剧集含 tvseries/tvspecial/web，电影取首个正片）
@@ -1660,9 +1678,19 @@
         }
     }
 
-    /** 排除特典集（Sn/Cn 开头），返回正片数组（按原顺序） */
-    function filterMainEpisodes(episodes) {
+    /**
+     * 排除特典集，只保留正片。
+     * 若传入 animeId：按 episodeId 与 animeId 的关系（offset 1–8999 为正片，9xxx 为特典）过滤。
+     * 若未传入 animeId：按原方案用标题排除（Sn/Cn 开头视为特典）。
+     */
+    function filterMainEpisodes(episodes, animeId) {
         if (!episodes || !Array.isArray(episodes)) return [];
+        if (animeId != null && typeof animeId === 'number') {
+            return episodes.filter((ep) => {
+                const offset = ep.episodeId - animeId * 10000;
+                return offset >= 1 && offset < 9000;
+            });
+        }
         return episodes.filter((ep) => !/^[SC]\d+\s/.test(ep.episodeTitle || ''));
     }
 
@@ -1682,7 +1710,7 @@
             // 电影：取第一个 anime 的首个正片
             if (episode === 'movie') {
                 const firstAnime = animes[0];
-                const mainEps = filterMainEpisodes(firstAnime.episodes);
+                const mainEps = filterMainEpisodes(firstAnime.episodes, firstAnime.animeId);
                 const ep = mainEps[0] || firstAnime.episodes?.[0];
                 if (ep) {
                     console.log(`[tmdbId匹配] 电影匹配成功: ${firstAnime.animeTitle}`);
@@ -1715,7 +1743,7 @@
             if (season === 0) {
                 // 第 0 季 = OVA，按季度数组顺序拼接 OVA，取 episodeNumber 对应集
                 const ovaPairs = ovaAnimes.flatMap((a) =>
-                    filterMainEpisodes(a.episodes).map((ep) => ({ anime: a, ep }))
+                    filterMainEpisodes(a.episodes, a.animeId).map((ep) => ({ anime: a, ep }))
                 );
                 const pair = ovaPairs[epNum - 1];
                 if (pair) {
@@ -1726,7 +1754,7 @@
                 // 非第 0/1 季：直接按季度顺序和集数匹配
                 const targetAnime = seasonAnimes[season - 1];
                 if (targetAnime) {
-                    const mainEps = filterMainEpisodes(targetAnime.episodes);
+                    const mainEps = filterMainEpisodes(targetAnime.episodes, targetAnime.animeId);
                     matchedEp = mainEps[epNum - 1];
                     matchedAnime = targetAnime;
                 }
@@ -1734,7 +1762,7 @@
                 // 第 1 季：可能为 TMDB 合并多季，按累计集数判断实际季度
                 let acc = 0;
                 for (let i = 0; i < seasonAnimes.length; i++) {
-                    const mainEps = filterMainEpisodes(seasonAnimes[i].episodes);
+                    const mainEps = filterMainEpisodes(seasonAnimes[i].episodes, seasonAnimes[i].animeId);
                     const count = mainEps.length;
                     if (epNum <= acc + count) {
                         matchedEp = mainEps[epNum - acc - 1];
@@ -1890,7 +1918,6 @@
                         imageUrl: previous_info.imageUrl,
                         seriesOrMovieId: seriesOrMovieId,
                         episodeIndex: currentEpisodeNumber - 1,
-                        bgmEpisodeIndex: currentEpisodeNumber - 1,
                     };
                     // 不写入缓存，因为这只是一个快速的推理
                     return predictedEpisodeInfo;
@@ -1923,7 +1950,6 @@
                 episodeId: res.episodeInfo.episodeId,
                 episodeTitle: res.episodeInfo.episodeTitle,
                 episodeIndex,
-                bgmEpisodeIndex: episodeIndex,
                 animeId: res.episodeInfo.animeId,
                 animeTitle: res.episodeInfo.animeTitle,
                 animeOriginalTitle: '',
@@ -1958,7 +1984,6 @@
             episodeId: animaInfo.animes[selectAnime_id].episodes[0].episodeId,
             episodeTitle: animaInfo.animes[selectAnime_id].episodes[0].episodeTitle,
             episodeIndex,
-            bgmEpisodeIndex: res.bgmEpisodeIndex ? res.bgmEpisodeIndex : episodeIndex,
             animeId: animaInfo.animes[selectAnime_id].animeId,
             animeTitle: animaInfo.animes[selectAnime_id].animeTitle,
             animeOriginalTitle,
@@ -4322,7 +4347,6 @@
             episodeId: episodeNumSelect.value,
             episodeTitle: episodeNumSelect.options[episodeNumSelect.selectedIndex].text,
             episodeIndex: episodeNumSelect.selectedIndex,
-            bgmEpisodeIndex: episodeNumSelect.selectedIndex,
             animeId: anime.animeId,
             animeTitle: anime.animeTitle,
             animeOriginalTitle: '',
