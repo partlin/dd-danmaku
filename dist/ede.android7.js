@@ -2109,7 +2109,7 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
   }
 
   // 通过缓存中的剧集名称与偏移量进行匹配
-  async function lsSeasonSearchEpisodes(_season_key, episode, prefix) {
+  async function lsSeasonSearchEpisodes(_season_key, episode, prefix, searchTitle) {
     var seasonInfoListStr = window.localStorage.getItem(_season_key);
     if (!seasonInfoListStr) {
       return null;
@@ -2119,6 +2119,10 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     var selectedSeasonInfo = null;
     for (var i = 0; i < seasonInfoList.length; i++) {
       var seasonInfo = seasonInfoList[i];
+      if (!isSeasonCompatible(searchTitle, seasonInfo.name)) {
+        console.warn("[\u81EA\u52A8\u5339\u914D] \u5FFD\u7565\u4E0E\u5F53\u524D\u5B63\u5EA6\u51B2\u7A81\u7684 seasonInfo \u7F13\u5B58: ".concat(seasonInfo.name));
+        continue;
+      }
       var adjustedEpisode = episode + seasonInfo.episodeOffset;
       if (adjustedEpisode > 0 && adjustedEpisode < minPositiveDiff) {
         minPositiveDiff = adjustedEpisode;
@@ -2129,6 +2133,9 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
       var newEpisode = episode + selectedSeasonInfo.episodeOffset;
       console.log("\u547D\u4E2DseasonInfo\u7F13\u5B58: ".concat(selectedSeasonInfo.name, ",\u504F\u79FB\u91CF: ").concat(selectedSeasonInfo.episodeOffset, ",\u96C6: ").concat(newEpisode));
       var _animaInfo = await fetchSearchEpisodes(selectedSeasonInfo.name, newEpisode, prefix);
+      if (_animaInfo && _animaInfo.animes) {
+        _animaInfo.animes = prioritizeSeasonCandidates(searchTitle, _animaInfo.animes);
+      }
       return {
         animaInfo: _animaInfo,
         newEpisode: newEpisode
@@ -2218,13 +2225,14 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     var scoredCandidates = candidates.map(function (candidate) {
       var score = calculateMatchScore(parsedSearch.title, candidate);
 
-      // 季度和集数匹配加分
-      if (parsedSearch.season && candidate.animeTitle) {
-        var candidateParsed = parseSearchKeyword(candidate.animeTitle);
-        if (candidateParsed.season === parsedSearch.season) {
-          score.total += 0.15; // 季度匹配加分
-          console.log("[\u667A\u80FD\u5339\u914D] \u5B63\u5EA6\u5339\u914D\u52A0\u5206: ".concat(candidate.animeTitle));
-        }
+      // 季度冲突是硬约束；同季度结果只额外加分。
+      var seasonScore = getSeasonMatchScore(searchTitle, candidate.animeTitle);
+      if (seasonScore < 0) {
+        score.total = -1;
+        console.log("[\u667A\u80FD\u5339\u914D] \u5FFD\u7565\u5B63\u5EA6\u51B2\u7A81\u5019\u9009: ".concat(candidate.animeTitle));
+      } else if (seasonScore > 1) {
+        score.total += 0.15;
+        console.log("[\u667A\u80FD\u5339\u914D] \u5B63\u5EA6\u5339\u914D\u52A0\u5206: ".concat(candidate.animeTitle));
       }
 
       // 集数匹配加分 (多种方式检测)
@@ -2427,6 +2435,48 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
       season: null,
       episode: null
     };
+  }
+
+  // 区分明确的季度命中、冲突，以及使用副标题区分季度的中性候选。
+  function getSeasonMatchScore(searchTitle, candidateTitle) {
+    var parsedSearch = parseSearchKeyword(String(searchTitle || ''));
+    if (parsedSearch.season === null) {
+      return 0;
+    }
+    var parsedCandidate = parseSearchKeyword(String(candidateTitle || ''));
+    if (parsedCandidate.season !== null) {
+      return parsedCandidate.season === parsedSearch.season ? 2 : -2;
+    }
+
+    // API 中未标注季度、且与基础标题完全相同的条目通常是第一季。
+    if (parsedSearch.season > 1 && normalizeTitle(parsedCandidate.title) === normalizeTitle(parsedSearch.title)) {
+      return -1;
+    }
+    return 1;
+  }
+  function isSeasonCompatible(searchTitle, candidateTitle) {
+    return getSeasonMatchScore(searchTitle, candidateTitle) >= 0;
+  }
+  function prioritizeSeasonCandidates(searchTitle, candidates) {
+    if (!Array.isArray(candidates) || candidates.length < 2) {
+      return candidates;
+    }
+    var parsedSearch = parseSearchKeyword(String(searchTitle || ''));
+    if (parsedSearch.season === null) {
+      return candidates;
+    }
+    return candidates.map(function (candidate, index) {
+      return {
+        candidate: candidate,
+        index: index,
+        seasonScore: getSeasonMatchScore(searchTitle, candidate.animeTitle)
+      };
+    }).sort(function (a, b) {
+      return b.seasonScore - a.seasonScore || a.index - b.index;
+    }).map(function (_ref5) {
+      var candidate = _ref5.candidate;
+      return candidate;
+    });
   }
 
   // 计算字符串相似度 (简化版编辑距离)
@@ -2642,7 +2692,7 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     var selectedApiConfig = apiConfigs[currentPriority].enabled && (_apiConfigs$currentPr = apiConfigs[currentPriority].prefix) !== null && _apiConfigs$currentPr !== void 0 && _apiConfigs$currentPr.trim() ? apiConfigs[currentPriority] : apiConfigs.custom;
 
     // 有赛季缓存时优先用赛季缓存（手动匹配后写入的 _anime_season_rel_*），避免哈希+智能匹配选错
-    var animaRes = await lsSeasonSearchEpisodes(_season_key, episode, selectedApiConfig.prefix);
+    var animaRes = await lsSeasonSearchEpisodes(_season_key, episode, selectedApiConfig.prefix, episodeName);
     if (animaRes && animaRes.animaInfo && animaRes.animaInfo.animes.length > 0) {
       var bgmEpisodeIndex = animaRes.newEpisode - 1;
       console.log("[\u81EA\u52A8\u5339\u914D] \u547D\u4E2D\u8D5B\u5B63\u7F13\u5B58\uFF0C\u76F4\u63A5\u4F7F\u7528");
@@ -2682,6 +2732,7 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
         console.log("[\u81EA\u52A8\u5339\u914D][".concat(config.name, "] \u5C1D\u8BD5 /search/episodes \u63A5\u53E3, \u6807\u9898\u540D: ").concat(searchTitle, ", \u96C6\u6570: ").concat(searchEpisode));
         var searchAnimaInfo = await fetchSearchEpisodes(searchTitle, searchEpisode, config.prefix);
         if (searchAnimaInfo && searchAnimaInfo.animes.length > 0) {
+          searchAnimaInfo.animes = prioritizeSeasonCandidates(searchTitle, searchAnimaInfo.animes);
           console.log("[".concat(config.name, "] \u5E26\u96C6\u6570\u641C\u7D22\u6210\u529F"));
           return {
             animaInfo: searchAnimaInfo,
@@ -2693,6 +2744,7 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
         console.log("[".concat(config.name, "] \u5E26\u96C6\u6570\u641C\u7D22\u5931\u8D25\uFF0C\u5C1D\u8BD5\u4E0D\u5E26\u96C6\u6570..."));
         searchAnimaInfo = await fetchSearchEpisodes(episodeName, null, config.prefix);
         if (searchAnimaInfo && searchAnimaInfo.animes.length > 0) {
+          searchAnimaInfo.animes = prioritizeSeasonCandidates(episodeName, searchAnimaInfo.animes);
           console.log("[".concat(config.name, "] \u4E0D\u5E26\u96C6\u6570\u641C\u7D22\u6210\u529F"));
           return {
             animaInfo: searchAnimaInfo,
@@ -2709,6 +2761,7 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     }
     var animaInfo = await fetchSearchEpisodes(animeName, episode, selectedApiConfig.prefix);
     if (animaInfo && animaInfo.animes.length > 0) {
+      animaInfo.animes = prioritizeSeasonCandidates(animeName, animaInfo.animes);
       return {
         animeOriginalTitle: '',
         animaInfo: animaInfo
@@ -2759,8 +2812,15 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
         }));
         var matchResult = await fetchMatchApi(matchPayload, config.prefix);
         if (matchResult && matchResult.isMatched && matchResult.animes && matchResult.animes.length > 0) {
+          var candidates = prioritizeSeasonCandidates(animeName, matchResult.animes);
+          var match = candidates.find(function (candidate) {
+            return isSeasonCompatible(animeName, candidate.animeTitle);
+          });
+          if (!match) {
+            console.warn("".concat(config.name, " /match \u63A5\u53E3\u547D\u4E2D\u7ED3\u679C\u4E0E\u5F53\u524D\u5B63\u5EA6\u51B2\u7A81\uFF0C\u653E\u5F03\u76F4\u63A5\u5339\u914D"));
+            continue;
+          }
           console.log("".concat(config.name, " /match \u63A5\u53E3\u76F4\u63A5\u5339\u914D\u6210\u529F\uFF0C\u5C06\u76F4\u63A5\u4F7F\u7528\u8FD4\u56DE\u7684 episodeId"));
-          var match = matchResult.animes[0];
           return {
             directMatch: true,
             apiPrefix: config.prefix,
@@ -2812,11 +2872,31 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     var _episode_key = itemInfoMap._episode_key,
       animeId = itemInfoMap.animeId,
       episode = itemInfoMap.episode,
-      seriesOrMovieId = itemInfoMap.seriesOrMovieId;
+      seriesOrMovieId = itemInfoMap.seriesOrMovieId,
+      episodeName = itemInfoMap.episodeName;
 
+    // 修正缓存键，区分官方和自定义API
+    var useOfficialApi = lsGetItem(lsKeys.useOfficialApi.id);
+    var useCustomApi = lsGetItem(lsKeys.useCustomApi.id);
+    var apiPriority = lsGetItem(lsKeys.apiPriority.id);
+    var enabledApis = apiPriority.filter(function (apiKey) {
+      if (apiKey === 'official') return useOfficialApi;
+      if (apiKey === 'custom') return useCustomApi;
+      return false;
+    });
+    var unique_episode_key = lsLocalKeys.apiPrefix + "".concat(enabledApis.join('_'), "_") + _episode_key;
+    // 单集缓存优先于上下集推理
+    if (is_auto && window.localStorage.getItem(unique_episode_key)) {
+      var cachedEpisodeInfo = JSON.parse(window.localStorage.getItem(unique_episode_key));
+      if (isSeasonCompatible(episodeName, cachedEpisodeInfo.animeTitle)) {
+        return cachedEpisodeInfo;
+      }
+      console.warn('[自动匹配] 忽略与当前季度冲突的本地匹配缓存');
+      window.localStorage.removeItem(unique_episode_key);
+    }
     // 下一集/上一集推理逻辑
     var previous_info = window.ede.previous_episode_info;
-    if (is_auto && previous_info && previous_info.episodeId && previous_info.seriesOrMovieId === seriesOrMovieId) {
+    if (is_auto && previous_info && previous_info.episodeId && previous_info.seriesOrMovieId === seriesOrMovieId && isSeasonCompatible(episodeName, previous_info.animeTitle)) {
       var previousEpisodeIndex = previous_info.episodeIndex; // 0-based
       var currentEpisodeNumber = episode; // 1-based
       var previousEpisodeId = parseInt(previous_info.episodeId, 10);
@@ -2911,15 +2991,21 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     }
     var animeOriginalTitle = res.animeOriginalTitle,
       animaInfo = res.animaInfo;
-    var selectAnime_id = 1;
+    var selectAnime_id = animaInfo.animes.findIndex(function (candidate) {
+      return isSeasonCompatible(episodeName, candidate.animeTitle);
+    });
+    if (selectAnime_id < 0) {
+      console.warn('[自动匹配] 搜索结果均与当前季度冲突，放弃自动匹配');
+      appendvideoOsdDanmakuInfo();
+      return null;
+    }
     if (animeId != -1) {
       for (var index = 0; index < animaInfo.animes.length; index++) {
-        if (animaInfo.animes[index].animeId == animeId) {
-          selectAnime_id = index + 1;
+        if (animaInfo.animes[index].animeId == animeId && isSeasonCompatible(episodeName, animaInfo.animes[index].animeTitle)) {
+          selectAnime_id = index;
         }
       }
     }
-    selectAnime_id = parseInt(selectAnime_id) - 1;
     var episodeIndex = isNaN(episode) ? 0 : episode - 1;
     var episodeInfo = {
       episodeId: animaInfo.animes[selectAnime_id].episodes[0].episodeId,
@@ -3230,10 +3316,10 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
       }
     }).then(function () {
       var extCommentCache = window.ede.extCommentCache[window.ede.itemId] || {};
-      objectEntries(extCommentCache).forEach(function (_ref5) {
-        var _ref6 = _slicedToArray(_ref5, 2),
-          key = _ref6[0],
-          val = _ref6[1];
+      objectEntries(extCommentCache).forEach(function (_ref6) {
+        var _ref7 = _slicedToArray(_ref6, 2),
+          key = _ref7[0],
+          val = _ref7[1];
         addExtComments(key, val);
       });
       window.ede.loading = false;
@@ -3290,10 +3376,10 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
   }
   function danmakuAutoFilterCancel() {
     if (Object.keys(window.ede.tempLsValues).length > 0) {
-      objectEntries(window.ede.tempLsValues).forEach(function (_ref7) {
-        var _ref8 = _slicedToArray(_ref7, 2),
-          key = _ref8[0],
-          val = _ref8[1];
+      objectEntries(window.ede.tempLsValues).forEach(function (_ref8) {
+        var _ref9 = _slicedToArray(_ref8, 2),
+          key = _ref9[0],
+          val = _ref9[1];
         return lsSetItem(key, val);
       });
       window.ede.tempLsValues = {};
@@ -3457,9 +3543,9 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
       return 100;
     }
     if (a.length > b.length) {
-      var _ref9 = [b, a];
-      a = _ref9[0];
-      b = _ref9[1];
+      var _ref0 = [b, a];
+      a = _ref0[0];
+      b = _ref0[1];
     }
     var previousRow = Array.from({
       length: a.length + 1
@@ -3475,9 +3561,9 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
         var deletionCost = currentRow[i - 1] + 1;
         currentRow[i] = Math.min(previousRow[i - 1] + substitutionCost, insertionCost, deletionCost);
       }
-      var _ref0 = [currentRow, previousRow];
-      previousRow = _ref0[0];
-      currentRow = _ref0[1];
+      var _ref1 = [currentRow, previousRow];
+      previousRow = _ref1[0];
+      currentRow = _ref1[1];
     }
     var distance = previousRow[a.length];
     var maxLength = Math.max(a.length, b.length);
@@ -4001,10 +4087,10 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     var allComments = comments.concat.apply(comments, _toConsumableArray(Object.values(curExtCommentCache || {})));
     var extUrlsDiv = getById(eleIds.extUrlsDiv);
     extUrlsDiv.innerHTML = '';
-    curExtCommentCache && objectEntries(curExtCommentCache).forEach(function (_ref1) {
-      var _ref10 = _slicedToArray(_ref1, 2),
-        key = _ref10[0],
-        val = _ref10[1];
+    curExtCommentCache && objectEntries(curExtCommentCache).forEach(function (_ref10) {
+      var _ref11 = _slicedToArray(_ref10, 2),
+        key = _ref11[0],
+        val = _ref11[1];
       var extUrlDiv = document.createElement('div');
       extUrlDiv.append(embyButton({
         label: '清空此加载',
@@ -4112,11 +4198,11 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     if (!container) {
       return;
     }
-    var _ref11 = window.ede.episode_info || {},
-      episodeTitle = _ref11.episodeTitle,
-      animeId = _ref11.animeId,
-      animeTitle = _ref11.animeTitle,
-      apiName = _ref11.apiName;
+    var _ref12 = window.ede.episode_info || {},
+      episodeTitle = _ref12.episodeTitle,
+      animeId = _ref12.animeId,
+      animeTitle = _ref12.animeTitle,
+      apiName = _ref12.apiName;
     var loadSum = getDanmakuComments(window.ede).length;
     var downloadSum = window.ede.commentsParsed.length;
     var template = "\n            <div style=\"display: flex;\">\n                <div id=\"".concat(eleIds.posterImgDiv, "\"></div>\n                <div>\n                    <div>\n                        <label class=\"").concat(classes.embyLabel, "\">\u5A92\u4F53\u540D: </label>\n                        <div class=\"").concat(classes.embyFieldDesc, "\">").concat(animeTitle, "</div>\n                    </div>\n                    ").concat(!episodeTitle ? '' : "<div>\n                        <label class=\"".concat(classes.embyLabel, "\">\u7AE0\u8282\u540D: </label>\n                        <div class=\"").concat(classes.embyFieldDesc, "\">").concat(episodeTitle, "</div>\n                    </div>"), "\n                    ").concat(!apiName ? '' : "<div>\n                        <label class=\"".concat(classes.embyLabel, "\">\u6765\u6E90: </label>\n                    </div>\n                    <div class=\"").concat(classes.embyFieldDesc, "\">").concat(apiName, "</div>"), "\n                    <div>\n                        <label class=\"").concat(classes.embyLabel, "\">\u5176\u5B83\u4FE1\u606F: </label>\n                        <div class=\"").concat(classes.embyFieldDesc, "\">\n                            \u83B7\u53D6\u603B\u6570: ").concat(downloadSum, ",\n                            \u52A0\u8F7D\u603B\u6570: ").concat(loadSum, ",\n                            \u88AB\u8FC7\u6EE4\u6570: ").concat(downloadSum - loadSum, "\n                        </div>\n                    </div>\n                </div>\n            </div>\n            <div style=\"margin-top: 2%;\">\n                <label class=\"").concat(classes.embyLabel, "\">").concat(lsKeys.danmuList.name, ": </label>\n                <div id=\"").concat(eleIds.danmuListDiv, "\" style=\"margin: 1% 0;\"></div>\n                <textarea id=\"").concat(eleIds.danmuListText, "\" readOnly style=\"display: none;resize: vertical;width: 100%\" rows=\"8\"\n                    is=\"emby-textarea\" class=\"txtOverview emby-textarea\"></textarea>\n                <div class=\"").concat(classes.embyFieldDesc, "\">\u5217\u8868\u5C55\u793A\u683C\u5F0F\u4E3A: [\u5E8F\u53F7][\u5206:\u79D2] : \u5F39\u5E55\u6B63\u6587 [\u6765\u6E90\u5E73\u53F0][\u7528\u6237ID][\u5F39\u5E55CID][\u6A21\u5F0F]</div>\n            </div>\n            <div id=\"").concat(eleIds.extInfoCtrlDiv, "\" style=\"margin: 0.6em 0;\"></div>\n            <div id=\"").concat(eleIds.extInfoDiv, "\" hidden>\n                <label class=\"").concat(classes.embyLabel, "\">Bangumi \u89D2\u8272\u4ECB\u7ECD: </label>\n                <div style=\"").concat(styles.embySlider + 'margin: 0.8em 0;', "\">\n                    <label class=\"").concat(classes.embyLabel, "\" style=\"width:7em;\">\u89D2\u8272\u56FE\u7247\u9AD8\u5EA6: </label>\n                    <div id=\"").concat(eleIds.characterImgHeihtDiv, "\" style=\"width: 36.5em; text-align: center;\"></div>\n                    <label>\n                        <label id=\"").concat(eleIds.characterImgHeihtLabel, "\" style=\"").concat(styles.embySliderLabel, "\">auto</label>\n                        <label>em</label>\n                    </label>\n                </div>\n                <div id=\"").concat(eleIds.charactersDiv, "\" style=\"display: flex; flex-wrap: wrap;\"></div>\n            </div>\n        ");
@@ -4129,8 +4215,8 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     buildExtInfo(container);
   }
   function buildDanmuListDiv(container) {
-    var _ref12 = window.ede.episode_info || {},
-      episodeId = _ref12.episodeId;
+    var _ref13 = window.ede.episode_info || {},
+      episodeId = _ref13.episodeId;
     var extCommentCache = window.ede.extCommentCache[window.ede.itemId] || {};
     var danmuListExts = Object.values(extCommentCache).map(function (value, index) {
       return {
@@ -4815,10 +4901,10 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
   }
   function buildOpenSourceLicense(container) {
     var openSourceWrapper = getById(eleIds.openSourceLicenseDiv, container);
-    objectEntries(openSourceLicense).map(function (_ref13) {
-      var _ref14 = _slicedToArray(_ref13, 2),
-        key = _ref14[0],
-        val = _ref14[1];
+    objectEntries(openSourceLicense).map(function (_ref14) {
+      var _ref15 = _slicedToArray(_ref14, 2),
+        key = _ref15[0],
+        val = _ref15[1];
       openSourceWrapper.append(embyALink(val.url, [key, val.name, val.version, val.license].join(' : ')));
     });
   }
@@ -4978,13 +5064,14 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
         console.log("[\u624B\u52A8\u5339\u914D][".concat(config.name, "] \u6B63\u5728\u641C\u7D22: \u6807\u9898='").concat(manualSearchTitle, "', \u96C6\u6570=").concat(manualSearchEpisode || '无'));
         var animaInfo = await fetchSearchEpisodes(manualSearchTitle, manualSearchEpisode, config.prefix);
         if (animaInfo && animaInfo.animes.length > 0) {
+          var _allAnimes;
           console.log("[\u624B\u52A8\u5339\u914D][".concat(config.name, "] \u641C\u7D22\u6210\u529F\uFF0C\u627E\u5230 ").concat(animaInfo.animes.length, " \u4E2A\u7ED3\u679C\u3002"));
           // 为每个结果打上来源标签
           animaInfo.animes.forEach(function (anime) {
             anime.apiPrefix = config.prefix;
             anime.apiName = config.name;
           });
-          allAnimes.push.apply(allAnimes, _toConsumableArray(animaInfo.animes));
+          (_allAnimes = allAnimes).push.apply(_allAnimes, _toConsumableArray(animaInfo.animes));
         } else {
           console.log("[\u624B\u52A8\u5339\u914D][".concat(config.name, "] \u672A\u627E\u5230\u7ED3\u679C\u3002"));
         }
@@ -4997,6 +5084,7 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     } finally {
       _iterator4.f();
     }
+    allAnimes = prioritizeSeasonCandidates(searchName, allAnimes);
     spinnerEle && spinnerEle.classList.add('hide');
     if (allAnimes.length < 1) {
       danmakuRemarkEle.innerText = '搜索结果为空';
@@ -5314,10 +5402,10 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     var input = document.createElement('input', {
       is: 'emby-input'
     });
-    objectEntries(props).forEach(function (_ref15) {
-      var _ref16 = _slicedToArray(_ref15, 2),
-        key = _ref16[0],
-        value = _ref16[1];
+    objectEntries(props).forEach(function (_ref16) {
+      var _ref17 = _slicedToArray(_ref16, 2),
+        key = _ref17[0],
+        value = _ref17[1];
       if (typeof value !== 'function') {
         input.setAttribute(key, value);
       }
@@ -5366,10 +5454,10 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     // !!! important: this is must setAttribute('is', 'emby-xxx'), unknown reason
     button.setAttribute('is', 'emby-button');
     button.setAttribute('type', 'button');
-    objectEntries(props).forEach(function (_ref17) {
-      var _ref18 = _slicedToArray(_ref17, 2),
-        key = _ref18[0],
-        value = _ref18[1];
+    objectEntries(props).forEach(function (_ref18) {
+      var _ref19 = _slicedToArray(_ref18, 2),
+        key = _ref19[0],
+        value = _ref19[1];
       if (key !== 'iconKey' && typeof value !== 'function') {
         button.setAttribute(key, value);
       }
@@ -5464,10 +5552,10 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
         selectElement.classList.add(classes.embySelectTv);
       }
     });
-    objectEntries(props).forEach(function (_ref19) {
-      var _ref20 = _slicedToArray(_ref19, 2),
-        key = _ref20[0],
-        value = _ref20[1];
+    objectEntries(props).forEach(function (_ref20) {
+      var _ref21 = _slicedToArray(_ref20, 2),
+        key = _ref21[0],
+        value = _ref21[1];
       if (typeof value !== 'function') {
         selectElement.setAttribute(key, value);
       }
@@ -5513,11 +5601,11 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     });
     return checkboxContainer;
   }
-  function embyCheckbox(_ref21) {
-    var id = _ref21.id,
-      name = _ref21.name,
-      label = _ref21.label,
-      value = _ref21.value;
+  function embyCheckbox(_ref22) {
+    var id = _ref22.id,
+      name = _ref22.name,
+      label = _ref22.label,
+      value = _ref22.value;
     var checked = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : false;
     var onChange = arguments.length > 2 ? arguments[2] : undefined;
     var checkboxLabel = document.createElement('label');
@@ -5560,10 +5648,10 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     var textarea = document.createElement('textarea', {
       is: 'emby-textarea'
     });
-    objectEntries(props).forEach(function (_ref22) {
-      var _ref23 = _slicedToArray(_ref22, 2),
-        key = _ref23[0],
-        value = _ref23[1];
+    objectEntries(props).forEach(function (_ref23) {
+      var _ref24 = _slicedToArray(_ref23, 2),
+        key = _ref24[0],
+        value = _ref24[1];
       if (typeof value !== 'function' && key !== 'readonly' && key !== 'styleResize' && key !== 'value') {
         textarea.setAttribute(key, value);
       }
@@ -5608,10 +5696,10 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     if (opts.id) {
       slider.setAttribute('id', opts.id);
     }
-    objectEntries(options).forEach(function (_ref24) {
-      var _ref25 = _slicedToArray(_ref24, 2),
-        key = _ref25[0],
-        value = _ref25[1];
+    objectEntries(options).forEach(function (_ref25) {
+      var _ref26 = _slicedToArray(_ref25, 2),
+        key = _ref26[0],
+        value = _ref26[1];
       if (key === 'lsKey') {
         // opts.key = value.id;
         var optsKeys = Object.keys(opts);
@@ -5756,24 +5844,24 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
   }
   function getSettingsJson() {
     var space = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : 4;
-    return JSON.stringify(Object.fromEntries(objectEntries(lsKeys).map(function (_ref26) {
-      var _ref27 = _slicedToArray(_ref26, 2),
-        key = _ref27[0],
-        value = _ref27[1];
+    return JSON.stringify(Object.fromEntries(objectEntries(lsKeys).map(function (_ref27) {
+      var _ref28 = _slicedToArray(_ref27, 2),
+        key = _ref28[0],
+        value = _ref28[1];
       return [value.id, lsGetItem(value.id)];
     })), null, space);
     // ([key, value]) => [value.id, { value: lsGetItem(value.id), name: value.name }])), null, space);
   }
   function settingsReset() {
-    var defaultSettings = Object.fromEntries(objectEntries(lsKeys).filter(function (_ref28) {
-      var _ref29 = _slicedToArray(_ref28, 2),
-        key = _ref29[0],
-        value = _ref29[1];
+    var defaultSettings = Object.fromEntries(objectEntries(lsKeys).filter(function (_ref29) {
+      var _ref30 = _slicedToArray(_ref29, 2),
+        key = _ref30[0],
+        value = _ref30[1];
       return lsKeys.filterKeywords.id !== value.id;
-    }).map(function (_ref30) {
-      var _ref31 = _slicedToArray(_ref30, 2),
-        key = _ref31[0],
-        value = _ref31[1];
+    }).map(function (_ref31) {
+      var _ref32 = _slicedToArray(_ref31, 2),
+        key = _ref32[0],
+        value = _ref32[1];
       return [value.id, value.defaultValue];
     }));
     lsBatchSet(defaultSettings);
@@ -5821,17 +5909,17 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
   function lsBatchSet(keyValues) {
     var needCheck = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : true;
     if (needCheck) {
-      return objectEntries(keyValues).reduce(function (acc, _ref32) {
-        var _ref33 = _slicedToArray(_ref32, 2),
-          id = _ref33[0],
-          value = _ref33[1];
+      return objectEntries(keyValues).reduce(function (acc, _ref33) {
+        var _ref34 = _slicedToArray(_ref33, 2),
+          id = _ref34[0],
+          value = _ref34[1];
         return acc || lsCheckSet(id, value);
       }, false);
     } else {
-      objectEntries(keyValues).forEach(function (_ref34) {
-        var _ref35 = _slicedToArray(_ref34, 2),
-          key = _ref35[0],
-          value = _ref35[1];
+      objectEntries(keyValues).forEach(function (_ref35) {
+        var _ref36 = _slicedToArray(_ref35, 2),
+          key = _ref36[0],
+          value = _ref36[1];
         return lsSetItem(key, value);
       });
     }
@@ -6009,10 +6097,10 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     return intervalId;
   }
   function refreshEventListener(eventsMap) {
-    objectEntries(eventsMap).forEach(function (_ref36) {
-      var _ref37 = _slicedToArray(_ref36, 2),
-        eventName = _ref37[0],
-        fn = _ref37[1];
+    objectEntries(eventsMap).forEach(function (_ref37) {
+      var _ref38 = _slicedToArray(_ref37, 2),
+        eventName = _ref38[0],
+        fn = _ref38[1];
       document.removeEventListener(eventName, fn);
       document.addEventListener(eventName, fn);
     });
@@ -6033,10 +6121,10 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     if (!player) {
       return;
     }
-    objectEntries(eventsMap).forEach(function (_ref38) {
-      var _ref39 = _slicedToArray(_ref38, 2),
-        eventName = _ref39[0],
-        fn = _ref39[1];
+    objectEntries(eventsMap).forEach(function (_ref39) {
+      var _ref40 = _slicedToArray(_ref39, 2),
+        eventName = _ref40[0],
+        fn = _ref40[1];
       // 无法修改 fn ,会导致引用变更重复添加,events.off 中的 array.indexOf(fn) 返回 -1
       events.off(player, eventName, fn);
       events.on(player, eventName, fn);
