@@ -2115,26 +2115,20 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
       return null;
     }
     var seasonInfoList = JSON.parse(seasonInfoListStr);
-    var minPositiveDiff = Infinity;
-    var selectedSeasonInfo = null;
-    for (var i = 0; i < seasonInfoList.length; i++) {
-      var seasonInfo = seasonInfoList[i];
-      if (!isSeasonCompatible(searchTitle, seasonInfo.name)) {
-        console.warn("[\u81EA\u52A8\u5339\u914D] \u5FFD\u7565\u4E0E\u5F53\u524D\u5B63\u5EA6\u51B2\u7A81\u7684 seasonInfo \u7F13\u5B58: ".concat(seasonInfo.name));
-        continue;
-      }
-      var adjustedEpisode = episode + seasonInfo.episodeOffset;
-      if (adjustedEpisode > 0 && adjustedEpisode < minPositiveDiff) {
-        minPositiveDiff = adjustedEpisode;
-        selectedSeasonInfo = seasonInfo;
-      }
-    }
+    var selectedSeasonInfo = selectSeasonInfo(searchTitle, seasonInfoList, episode);
     if (selectedSeasonInfo) {
-      var newEpisode = episode + selectedSeasonInfo.episodeOffset;
-      console.log("\u547D\u4E2DseasonInfo\u7F13\u5B58: ".concat(selectedSeasonInfo.name, ",\u504F\u79FB\u91CF: ").concat(selectedSeasonInfo.episodeOffset, ",\u96C6: ").concat(newEpisode));
-      var _animaInfo = await fetchSearchEpisodes(selectedSeasonInfo.name, newEpisode, prefix);
+      var episodeOffset = getSeasonEpisodeOffset(selectedSeasonInfo);
+      var newEpisode = episode + episodeOffset;
+      console.log("\u547D\u4E2DseasonInfo\u7F13\u5B58: ".concat(selectedSeasonInfo.name, ",\u504F\u79FB\u91CF: ").concat(episodeOffset, ",\u96C6: ").concat(newEpisode));
+      var _animaInfo = await fetchSearchEpisodes(selectedSeasonInfo.name, newEpisode, selectedSeasonInfo.apiPrefix || prefix);
       if (_animaInfo && _animaInfo.animes) {
         _animaInfo.animes = prioritizeSeasonCandidates(searchTitle, _animaInfo.animes);
+        var selectedAnimeIndex = _animaInfo.animes.findIndex(function (anime) {
+          return anime.animeId == selectedSeasonInfo.animeId;
+        });
+        if (selectedAnimeIndex > 0) {
+          _animaInfo.animes.unshift(_animaInfo.animes.splice(selectedAnimeIndex, 1)[0]);
+        }
       }
       return {
         animaInfo: _animaInfo,
@@ -2226,7 +2220,7 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
       var score = calculateMatchScore(parsedSearch.title, candidate);
 
       // 季度冲突是硬约束；同季度结果只额外加分。
-      var seasonScore = getSeasonMatchScore(searchTitle, candidate.animeTitle);
+      var seasonScore = getSeasonMatchScore(searchTitle, candidate.animeTitle, candidate.type);
       if (seasonScore < 0) {
         score.total = -1;
         console.log("[\u667A\u80FD\u5339\u914D] \u5FFD\u7565\u5B63\u5EA6\u51B2\u7A81\u5019\u9009: ".concat(candidate.animeTitle));
@@ -2438,7 +2432,11 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
   }
 
   // 区分明确的季度命中、冲突，以及使用副标题区分季度的中性候选。
-  function getSeasonMatchScore(searchTitle, candidateTitle) {
+  function isSpecialAnimeType(candidateType) {
+    var normalizedType = String(candidateType || '').toLowerCase();
+    return normalizedType === 'ova' || normalizedType === 'tvspecial';
+  }
+  function getSeasonMatchScore(searchTitle, candidateTitle, candidateType) {
     var parsedSearch = parseSearchKeyword(String(searchTitle || ''));
     if (parsedSearch.season === null) {
       return 0;
@@ -2448,14 +2446,22 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
       return parsedCandidate.season === parsedSearch.season ? 2 : -2;
     }
 
+    // Emby 的 Season 0 表示特别篇，优先限定为 OVA/TV Special。
+    if (parsedSearch.season === 0) {
+      if (!candidateType) {
+        return normalizeTitle(parsedCandidate.title) === normalizeTitle(parsedSearch.title) ? -1 : 1;
+      }
+      return isSpecialAnimeType(candidateType) ? 3 : -2;
+    }
+
     // API 中未标注季度、且与基础标题完全相同的条目通常是第一季。
     if (parsedSearch.season > 1 && normalizeTitle(parsedCandidate.title) === normalizeTitle(parsedSearch.title)) {
       return -1;
     }
     return 1;
   }
-  function isSeasonCompatible(searchTitle, candidateTitle) {
-    return getSeasonMatchScore(searchTitle, candidateTitle) >= 0;
+  function isSeasonCompatible(searchTitle, candidateTitle, candidateType) {
+    return getSeasonMatchScore(searchTitle, candidateTitle, candidateType) >= 0;
   }
   function prioritizeSeasonCandidates(searchTitle, candidates) {
     if (!Array.isArray(candidates) || candidates.length < 2) {
@@ -2469,7 +2475,7 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
       return {
         candidate: candidate,
         index: index,
-        seasonScore: getSeasonMatchScore(searchTitle, candidate.animeTitle)
+        seasonScore: getSeasonMatchScore(searchTitle, candidate.animeTitle, candidate.type)
       };
     }).sort(function (a, b) {
       return b.seasonScore - a.seasonScore || a.index - b.index;
@@ -2477,6 +2483,42 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
       var candidate = _ref5.candidate;
       return candidate;
     });
+  }
+  function getSeasonEpisodeOffset(seasonInfo) {
+    var episodeOffset = Number(seasonInfo.episodeOffset);
+    if (!Number.isFinite(episodeOffset)) {
+      return NaN;
+    }
+    // 旧缓存用 0-based 下标直接计算，所有偏移都少了 1。
+    return seasonInfo.episodeOffsetVersion === 2 ? episodeOffset : episodeOffset + 1;
+  }
+  function selectSeasonInfo(searchTitle, seasonInfoList, episode) {
+    var _seasonInfoList$map$f;
+    return ((_seasonInfoList$map$f = seasonInfoList.map(function (seasonInfo, index) {
+      return {
+        seasonInfo: seasonInfo,
+        index: index,
+        adjustedEpisode: Number(episode) + getSeasonEpisodeOffset(seasonInfo),
+        seasonScore: getSeasonMatchScore(searchTitle, seasonInfo.name, seasonInfo.animeType)
+      };
+    }).filter(function (item) {
+      return item.adjustedEpisode > 0 && item.seasonScore >= 0;
+    }).sort(function (a, b) {
+      return b.seasonScore - a.seasonScore || Number(b.seasonInfo.updatedAt || 0) - Number(a.seasonInfo.updatedAt || 0) || a.adjustedEpisode - b.adjustedEpisode || a.index - b.index;
+    })[0]) === null || _seasonInfoList$map$f === void 0 ? void 0 : _seasonInfoList$map$f.seasonInfo) || null;
+  }
+  function createSeasonInfo(anime, selectedEpisodeIndex, embyEpisode) {
+    return {
+      name: anime.animeTitle,
+      // selectedEpisodeIndex 是 0-based，季度偏移使用 1-based 集号计算。
+      episodeOffset: Number(selectedEpisodeIndex) + 1 - Number(embyEpisode),
+      episodeOffsetVersion: 2,
+      animeId: anime.animeId,
+      animeType: anime.type,
+      apiPrefix: anime.apiPrefix,
+      apiName: anime.apiName,
+      updatedAt: Date.now()
+    };
   }
 
   // 计算字符串相似度 (简化版编辑距离)
@@ -2814,7 +2856,7 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
         if (matchResult && matchResult.isMatched && matchResult.animes && matchResult.animes.length > 0) {
           var candidates = prioritizeSeasonCandidates(animeName, matchResult.animes);
           var match = candidates.find(function (candidate) {
-            return isSeasonCompatible(animeName, candidate.animeTitle);
+            return isSeasonCompatible(animeName, candidate.animeTitle, candidate.type);
           });
           if (!match) {
             console.warn("".concat(config.name, " /match \u63A5\u53E3\u547D\u4E2D\u7ED3\u679C\u4E0E\u5F53\u524D\u5B63\u5EA6\u51B2\u7A81\uFF0C\u653E\u5F03\u76F4\u63A5\u5339\u914D"));
@@ -2888,7 +2930,7 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     // 单集缓存优先于上下集推理
     if (is_auto && window.localStorage.getItem(unique_episode_key)) {
       var cachedEpisodeInfo = JSON.parse(window.localStorage.getItem(unique_episode_key));
-      if (isSeasonCompatible(episodeName, cachedEpisodeInfo.animeTitle)) {
+      if (isSeasonCompatible(episodeName, cachedEpisodeInfo.animeTitle, cachedEpisodeInfo.animeType)) {
         return cachedEpisodeInfo;
       }
       console.warn('[自动匹配] 忽略与当前季度冲突的本地匹配缓存');
@@ -2896,7 +2938,7 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     }
     // 下一集/上一集推理逻辑
     var previous_info = window.ede.previous_episode_info;
-    if (is_auto && previous_info && previous_info.episodeId && previous_info.seriesOrMovieId === seriesOrMovieId && isSeasonCompatible(episodeName, previous_info.animeTitle)) {
+    if (is_auto && previous_info && previous_info.episodeId && previous_info.seriesOrMovieId === seriesOrMovieId && isSeasonCompatible(episodeName, previous_info.animeTitle, previous_info.animeType)) {
       var previousEpisodeIndex = previous_info.episodeIndex; // 0-based
       var currentEpisodeNumber = episode; // 1-based
       var previousEpisodeId = parseInt(previous_info.episodeId, 10);
@@ -2923,6 +2965,7 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
             episodeTitle: "\u7B2C ".concat(currentEpisodeNumber, " \u96C6 (\u63A8\u65AD)"),
             animeId: previous_info.animeId,
             animeTitle: previous_info.animeTitle,
+            animeType: previous_info.animeType,
             imageUrl: previous_info.imageUrl,
             seriesOrMovieId: seriesOrMovieId,
             episodeIndex: currentEpisodeNumber - 1
@@ -2973,6 +3016,7 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
         bgmEpisodeIndex: _episodeIndex,
         animeId: res.episodeInfo.animeId,
         animeTitle: res.episodeInfo.animeTitle,
+        animeType: res.episodeInfo.animeType || res.episodeInfo.type,
         animeOriginalTitle: '',
         imageUrl: res.episodeInfo.imageUrl,
         apiName: res.apiName,
@@ -2992,7 +3036,7 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     var animeOriginalTitle = res.animeOriginalTitle,
       animaInfo = res.animaInfo;
     var selectAnime_id = animaInfo.animes.findIndex(function (candidate) {
-      return isSeasonCompatible(episodeName, candidate.animeTitle);
+      return isSeasonCompatible(episodeName, candidate.animeTitle, candidate.type);
     });
     if (selectAnime_id < 0) {
       console.warn('[自动匹配] 搜索结果均与当前季度冲突，放弃自动匹配');
@@ -3001,7 +3045,7 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
     }
     if (animeId != -1) {
       for (var index = 0; index < animaInfo.animes.length; index++) {
-        if (animaInfo.animes[index].animeId == animeId && isSeasonCompatible(episodeName, animaInfo.animes[index].animeTitle)) {
+        if (animaInfo.animes[index].animeId == animeId && isSeasonCompatible(episodeName, animaInfo.animes[index].animeTitle, animaInfo.animes[index].type)) {
           selectAnime_id = index;
         }
       }
@@ -3014,6 +3058,7 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
       bgmEpisodeIndex: res.bgmEpisodeIndex ? res.bgmEpisodeIndex : episodeIndex,
       animeId: animaInfo.animes[selectAnime_id].animeId,
       animeTitle: animaInfo.animes[selectAnime_id].animeTitle,
+      animeType: animaInfo.animes[selectAnime_id].type,
       animeOriginalTitle: animeOriginalTitle,
       seriesOrMovieId: seriesOrMovieId
     };
@@ -5192,16 +5237,14 @@ function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == 
       bgmEpisodeIndex: episodeNumSelect.selectedIndex,
       animeId: anime.animeId,
       animeTitle: anime.animeTitle,
+      animeType: anime.type,
       animeOriginalTitle: '',
       imageUrl: anime.imageUrl,
       seriesOrMovieId: seriesOrMovieId,
       apiPrefix: anime.apiPrefix,
       apiName: anime.apiName
     };
-    var seasonInfo = {
-      name: anime.animeTitle,
-      episodeOffset: episodeNumSelect.selectedIndex - window.ede.searchDanmakuOpts.episode
-    };
+    var seasonInfo = createSeasonInfo(anime, episodeNumSelect.selectedIndex, window.ede.searchDanmakuOpts.episode);
     writeLsSeasonInfo(window.ede.searchDanmakuOpts._season_key, seasonInfo);
 
     // 使用与 getEpisodeInfo 中相同的逻辑来构造缓存键

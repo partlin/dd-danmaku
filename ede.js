@@ -1112,26 +1112,18 @@
             return null;
         }
         const seasonInfoList = JSON.parse(seasonInfoListStr);
-        let minPositiveDiff = Infinity;
-        let selectedSeasonInfo = null;
-        for (let i = 0; i < seasonInfoList.length; i++) {
-            const seasonInfo = seasonInfoList[i];
-            if (!isSeasonCompatible(searchTitle, seasonInfo.name)) {
-                console.warn(`[自动匹配] 忽略与当前季度冲突的 seasonInfo 缓存: ${seasonInfo.name}`);
-                continue;
-            }
-            const adjustedEpisode = episode + seasonInfo.episodeOffset;
-            if (adjustedEpisode > 0 && adjustedEpisode < minPositiveDiff) {
-                minPositiveDiff = adjustedEpisode;
-                selectedSeasonInfo = seasonInfo;
-            }
-        }
+        const selectedSeasonInfo = selectSeasonInfo(searchTitle, seasonInfoList, episode);
         if (selectedSeasonInfo) {
-            const newEpisode = episode + selectedSeasonInfo.episodeOffset;
-            console.log(`命中seasonInfo缓存: ${selectedSeasonInfo.name},偏移量: ${selectedSeasonInfo.episodeOffset},集: ${newEpisode}`);
-            const animaInfo = await fetchSearchEpisodes(selectedSeasonInfo.name, newEpisode, prefix);
+            const episodeOffset = getSeasonEpisodeOffset(selectedSeasonInfo);
+            const newEpisode = episode + episodeOffset;
+            console.log(`命中seasonInfo缓存: ${selectedSeasonInfo.name},偏移量: ${episodeOffset},集: ${newEpisode}`);
+            const animaInfo = await fetchSearchEpisodes(selectedSeasonInfo.name, newEpisode, selectedSeasonInfo.apiPrefix || prefix);
             if (animaInfo && animaInfo.animes) {
                 animaInfo.animes = prioritizeSeasonCandidates(searchTitle, animaInfo.animes);
+                const selectedAnimeIndex = animaInfo.animes.findIndex(anime => anime.animeId == selectedSeasonInfo.animeId);
+                if (selectedAnimeIndex > 0) {
+                    animaInfo.animes.unshift(animaInfo.animes.splice(selectedAnimeIndex, 1)[0]);
+                }
             }
             return { animaInfo, newEpisode, };
         }
@@ -1203,7 +1195,7 @@
             const score = calculateMatchScore(parsedSearch.title, candidate);
 
             // 季度冲突是硬约束；同季度结果只额外加分。
-            const seasonScore = getSeasonMatchScore(searchTitle, candidate.animeTitle);
+            const seasonScore = getSeasonMatchScore(searchTitle, candidate.animeTitle, candidate.type);
             if (seasonScore < 0) {
                 score.total = -1;
                 console.log(`[智能匹配] 忽略季度冲突候选: ${candidate.animeTitle}`);
@@ -1369,7 +1361,12 @@
     }
 
     // 区分明确的季度命中、冲突，以及使用副标题区分季度的中性候选。
-    function getSeasonMatchScore(searchTitle, candidateTitle) {
+    function isSpecialAnimeType(candidateType) {
+        const normalizedType = String(candidateType || '').toLowerCase();
+        return normalizedType === 'ova' || normalizedType === 'tvspecial';
+    }
+
+    function getSeasonMatchScore(searchTitle, candidateTitle, candidateType) {
         const parsedSearch = parseSearchKeyword(String(searchTitle || ''));
         if (parsedSearch.season === null) {
             return 0;
@@ -1378,6 +1375,14 @@
         const parsedCandidate = parseSearchKeyword(String(candidateTitle || ''));
         if (parsedCandidate.season !== null) {
             return parsedCandidate.season === parsedSearch.season ? 2 : -2;
+        }
+
+        // Emby 的 Season 0 表示特别篇，优先限定为 OVA/TV Special。
+        if (parsedSearch.season === 0) {
+            if (!candidateType) {
+                return normalizeTitle(parsedCandidate.title) === normalizeTitle(parsedSearch.title) ? -1 : 1;
+            }
+            return isSpecialAnimeType(candidateType) ? 3 : -2;
         }
 
         // API 中未标注季度、且与基础标题完全相同的条目通常是第一季。
@@ -1389,8 +1394,8 @@
         return 1;
     }
 
-    function isSeasonCompatible(searchTitle, candidateTitle) {
-        return getSeasonMatchScore(searchTitle, candidateTitle) >= 0;
+    function isSeasonCompatible(searchTitle, candidateTitle, candidateType) {
+        return getSeasonMatchScore(searchTitle, candidateTitle, candidateType) >= 0;
     }
 
     function prioritizeSeasonCandidates(searchTitle, candidates) {
@@ -1406,10 +1411,48 @@
             .map((candidate, index) => ({
                 candidate,
                 index,
-                seasonScore: getSeasonMatchScore(searchTitle, candidate.animeTitle),
+                seasonScore: getSeasonMatchScore(searchTitle, candidate.animeTitle, candidate.type),
             }))
             .sort((a, b) => b.seasonScore - a.seasonScore || a.index - b.index)
             .map(({ candidate }) => candidate);
+    }
+
+    function getSeasonEpisodeOffset(seasonInfo) {
+        const episodeOffset = Number(seasonInfo.episodeOffset);
+        if (!Number.isFinite(episodeOffset)) {
+            return NaN;
+        }
+        // 旧缓存用 0-based 下标直接计算，所有偏移都少了 1。
+        return seasonInfo.episodeOffsetVersion === 2 ? episodeOffset : episodeOffset + 1;
+    }
+
+    function selectSeasonInfo(searchTitle, seasonInfoList, episode) {
+        return seasonInfoList
+            .map((seasonInfo, index) => ({
+                seasonInfo,
+                index,
+                adjustedEpisode: Number(episode) + getSeasonEpisodeOffset(seasonInfo),
+                seasonScore: getSeasonMatchScore(searchTitle, seasonInfo.name, seasonInfo.animeType),
+            }))
+            .filter(item => item.adjustedEpisode > 0 && item.seasonScore >= 0)
+            .sort((a, b) => b.seasonScore - a.seasonScore
+                || Number(b.seasonInfo.updatedAt || 0) - Number(a.seasonInfo.updatedAt || 0)
+                || a.adjustedEpisode - b.adjustedEpisode
+                || a.index - b.index)[0]?.seasonInfo || null;
+    }
+
+    function createSeasonInfo(anime, selectedEpisodeIndex, embyEpisode) {
+        return {
+            name: anime.animeTitle,
+            // selectedEpisodeIndex 是 0-based，季度偏移使用 1-based 集号计算。
+            episodeOffset: Number(selectedEpisodeIndex) + 1 - Number(embyEpisode),
+            episodeOffsetVersion: 2,
+            animeId: anime.animeId,
+            animeType: anime.type,
+            apiPrefix: anime.apiPrefix,
+            apiName: anime.apiName,
+            updatedAt: Date.now(),
+        };
     }
 
     // 计算字符串相似度 (简化版编辑距离)
@@ -1750,6 +1793,7 @@
                             episodeTitle: ep.episodeTitle,
                             animeId: firstAnime.animeId,
                             animeTitle: firstAnime.animeTitle,
+                            animeType: firstAnime.type,
                             imageUrl: dandanplayApi.posterImg(firstAnime.animeId)
                         }
                     };
@@ -1811,6 +1855,7 @@
                         episodeTitle: matchedEp.episodeTitle,
                         animeId: matchedAnime.animeId,
                         animeTitle: matchedAnime.animeTitle,
+                        animeType: matchedAnime.type,
                         imageUrl: dandanplayApi.posterImg(matchedAnime.animeId)
                     }
                 };
@@ -1854,7 +1899,7 @@
             const matchResult = await fetchMatchApi(matchPayload, config.prefix);
             if (matchResult && matchResult.isMatched && matchResult.animes && matchResult.animes.length > 0) {
                 const candidates = prioritizeSeasonCandidates(animeName, matchResult.animes);
-                const match = candidates.find(candidate => isSeasonCompatible(animeName, candidate.animeTitle));
+                const match = candidates.find(candidate => isSeasonCompatible(animeName, candidate.animeTitle, candidate.type));
                 if (!match) {
                     console.warn(`${config.name} /match 接口命中结果与当前季度冲突，放弃直接匹配`);
                     continue;
@@ -1913,7 +1958,7 @@
         // 单集缓存优先于上下集推理
         if (is_auto && window.localStorage.getItem(unique_episode_key)) {
             const cachedEpisodeInfo = JSON.parse(window.localStorage.getItem(unique_episode_key));
-            if (isSeasonCompatible(episodeName, cachedEpisodeInfo.animeTitle)) {
+            if (isSeasonCompatible(episodeName, cachedEpisodeInfo.animeTitle, cachedEpisodeInfo.animeType)) {
                 return cachedEpisodeInfo;
             }
             console.warn('[自动匹配] 忽略与当前季度冲突的本地匹配缓存');
@@ -1923,7 +1968,7 @@
         // 下一集/上一集推理逻辑
         const previous_info = window.ede.previous_episode_info;
         if (is_auto && previous_info && previous_info.episodeId && previous_info.seriesOrMovieId === seriesOrMovieId
-            && isSeasonCompatible(episodeName, previous_info.animeTitle)) {
+            && isSeasonCompatible(episodeName, previous_info.animeTitle, previous_info.animeType)) {
             const previousEpisodeIndex = previous_info.episodeIndex; // 0-based
             const currentEpisodeNumber = episode; // 1-based
             const previousEpisodeId = parseInt(previous_info.episodeId, 10);
@@ -1953,6 +1998,7 @@
                         episodeTitle: `第 ${currentEpisodeNumber} 集 (推理)`,
                         animeId: previous_info.animeId,
                         animeTitle: previous_info.animeTitle,
+                        animeType: previous_info.animeType,
                         imageUrl: previous_info.imageUrl,
                         seriesOrMovieId: seriesOrMovieId,
                         episodeIndex: currentEpisodeNumber - 1,
@@ -1992,6 +2038,7 @@
                 bgmEpisodeIndex: episodeIndex,
                 animeId: res.episodeInfo.animeId,
                 animeTitle: res.episodeInfo.animeTitle,
+                animeType: res.episodeInfo.animeType || res.episodeInfo.type,
                 animeOriginalTitle: '',
                 imageUrl: res.episodeInfo.imageUrl,
                 apiName: res.apiName,
@@ -2010,7 +2057,7 @@
         }
 
         const { animeOriginalTitle, animaInfo } = res;
-        let selectAnime_id = animaInfo.animes.findIndex(candidate => isSeasonCompatible(episodeName, candidate.animeTitle));
+        let selectAnime_id = animaInfo.animes.findIndex(candidate => isSeasonCompatible(episodeName, candidate.animeTitle, candidate.type));
         if (selectAnime_id < 0) {
             console.warn('[自动匹配] 搜索结果均与当前季度冲突，放弃自动匹配');
             appendvideoOsdDanmakuInfo();
@@ -2019,7 +2066,7 @@
         if (animeId != -1) {
             for (let index = 0; index < animaInfo.animes.length; index++) {
                 if (animaInfo.animes[index].animeId == animeId
-                    && isSeasonCompatible(episodeName, animaInfo.animes[index].animeTitle)) {
+                    && isSeasonCompatible(episodeName, animaInfo.animes[index].animeTitle, animaInfo.animes[index].type)) {
                     selectAnime_id = index;
                 }
             }
@@ -2032,6 +2079,7 @@
             bgmEpisodeIndex: res.bgmEpisodeIndex ? res.bgmEpisodeIndex : episodeIndex,
             animeId: animaInfo.animes[selectAnime_id].animeId,
             animeTitle: animaInfo.animes[selectAnime_id].animeTitle,
+            animeType: animaInfo.animes[selectAnime_id].type,
             animeOriginalTitle,
             seriesOrMovieId: seriesOrMovieId,
         };
@@ -4397,16 +4445,18 @@
             bgmEpisodeIndex: episodeNumSelect.selectedIndex,
             animeId: anime.animeId,
             animeTitle: anime.animeTitle,
+            animeType: anime.type,
             animeOriginalTitle: '',
             imageUrl: anime.imageUrl,
             seriesOrMovieId: seriesOrMovieId,
             apiPrefix: anime.apiPrefix,
             apiName: anime.apiName,
         };
-        const seasonInfo = {
-            name: anime.animeTitle,
-            episodeOffset: episodeNumSelect.selectedIndex - window.ede.searchDanmakuOpts.episode,
-        }
+        const seasonInfo = createSeasonInfo(
+            anime,
+            episodeNumSelect.selectedIndex,
+            window.ede.searchDanmakuOpts.episode,
+        );
         writeLsSeasonInfo(window.ede.searchDanmakuOpts._season_key, seasonInfo);
 
         // 使用与 getEpisodeInfo 中相同的逻辑来构造缓存键
