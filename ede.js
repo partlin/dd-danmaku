@@ -3,7 +3,7 @@
 // @description  Emby弹幕插件 - Emby风格
 // @namespace    https://github.com/chen3861229/dd-danmaku
 // @author       chen3861229
-// @version      1.47
+// @version      1.48
 // @copyright    2022, RyoLee (https://github.com/RyoLee)
 // @license      MIT; https://raw.githubusercontent.com/RyoLee/emby-danmaku/master/LICENSE
 // @icon         https://github.githubassets.com/pinned-octocat.svg
@@ -23,7 +23,7 @@
     // note02: url 禁止使用相对路径,非 web 环境的根路径为文件路径,非 http
     // ------ 程序内部使用,请勿更改 start ------
     const openSourceLicense = {
-        self: { version: '1.47', name: 'Emby Danmaku Extension(Forked from original:1.11)', license: 'MIT License', url: 'https://github.com/chen3861229/dd-danmaku' },
+        self: { version: '1.48', name: 'Emby Danmaku Extension(Forked from original:1.11)', license: 'MIT License', url: 'https://github.com/chen3861229/dd-danmaku' },
         original: { version: '1.11', name: 'Emby Danmaku Extension', license: 'MIT License', url: 'https://github.com/RyoLee/emby-danmaku' },
         jellyfinFork: { version: '1.52', name: 'Jellyfin Danmaku Extension', license: 'MIT License', url: 'https://github.com/Izumiko/jellyfin-danmaku' },
         danmaku: { version: '2.0.8', name: 'Danmaku', license: 'MIT License', url: 'https://github.com/weizhenye/Danmaku' },
@@ -1699,7 +1699,6 @@
         // 尝试 tmdbId 匹配（季度剧集含 tvseries/tvspecial/web，电影取首个正片）
         const tmdbMatchResult = await tryMatchByTmdbId(itemInfoMap, apiConfigs, apiPriority);
         if (tmdbMatchResult) {
-            debugger;
             return tmdbMatchResult;
         }
 
@@ -4375,7 +4374,7 @@
             , selectAnimeIdx, allAnimes, 'animeId', opt => `${opt.animeTitle} 类型：${opt.typeDescription} 来源：${opt.apiName}`, doDanmakuAnimeSelect);
         danmakuAnimeDiv.append(animeSelect);
         const episodeNumSelect = embySelect({ id: eleIds.danmakuEpisodeNumSelect, label: '集数: ', style: 'width: auto;max-width: 100%;' }
-            , window.ede.searchDanmakuOpts.episode - 1, allAnimes[selectAnimeIdx].episodes, 'episodeId', (opt, i) => `${i + 1} - ${opt.episodeTitle}`);
+            , window.ede.searchDanmakuOpts.episode, allAnimes[selectAnimeIdx].episodes, 'episodeId', (opt, i) => `${i + 1} - ${opt.episodeTitle}`);
         danmakuEpisodeNumDiv.append(episodeNumSelect);
         getById(eleIds.danmakuEpisodeFlag).hidden = false;
         getById(eleIds.danmakuSwitchEpisode).disabled = false;
@@ -4455,7 +4454,7 @@
         const seasonInfo = createSeasonInfo(
             anime,
             episodeNumSelect.selectedIndex,
-            window.ede.searchDanmakuOpts.episode,
+            window.ede.searchDanmakuOpts.episode + 1, // searchDanmakuOpts.episode 是 0-based，createSeasonInfo 期望 1-based embyEpisode
         );
         writeLsSeasonInfo(window.ede.searchDanmakuOpts._season_key, seasonInfo);
 
