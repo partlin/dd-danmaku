@@ -3,7 +3,7 @@
 // @description  Emby弹幕插件 - Emby风格
 // @namespace    https://github.com/chen3861229/dd-danmaku
 // @author       chen3861229
-// @version      1.48
+// @version      1.49
 // @copyright    2022, RyoLee (https://github.com/RyoLee)
 // @license      MIT; https://raw.githubusercontent.com/RyoLee/emby-danmaku/master/LICENSE
 // @icon         https://github.githubassets.com/pinned-octocat.svg
@@ -23,7 +23,7 @@
     // note02: url 禁止使用相对路径,非 web 环境的根路径为文件路径,非 http
     // ------ 程序内部使用,请勿更改 start ------
     const openSourceLicense = {
-        self: { version: '1.48', name: 'Emby Danmaku Extension(Forked from original:1.11)', license: 'MIT License', url: 'https://github.com/chen3861229/dd-danmaku' },
+        self: { version: '1.49', name: 'Emby Danmaku Extension(Forked from original:1.11)', license: 'MIT License', url: 'https://github.com/chen3861229/dd-danmaku' },
         original: { version: '1.11', name: 'Emby Danmaku Extension', license: 'MIT License', url: 'https://github.com/RyoLee/emby-danmaku' },
         jellyfinFork: { version: '1.52', name: 'Jellyfin Danmaku Extension', license: 'MIT License', url: 'https://github.com/Izumiko/jellyfin-danmaku' },
         danmaku: { version: '2.0.8', name: 'Danmaku', license: 'MIT License', url: 'https://github.com/weizhenye/Danmaku' },
@@ -1957,7 +1957,10 @@
         // 单集缓存优先于上下集推理
         if (is_auto && window.localStorage.getItem(unique_episode_key)) {
             const cachedEpisodeInfo = JSON.parse(window.localStorage.getItem(unique_episode_key));
-            if (isSeasonCompatible(episodeName, cachedEpisodeInfo.animeTitle, cachedEpisodeInfo.animeType)) {
+            // 手动匹配是用户显式选择，跳过季度校验：
+            // 弹弹play 常把特别篇归入普通季度条目（如 S1 番外編挂在“第二部分”条目下），
+            // 若按 season 0 校验会立即拒绝并删除刚写入的手动缓存，导致弹幕总量 0。
+            if (cachedEpisodeInfo.manualMatched || isSeasonCompatible(episodeName, cachedEpisodeInfo.animeTitle, cachedEpisodeInfo.animeType)) {
                 return cachedEpisodeInfo;
             }
             console.warn('[自动匹配] 忽略与当前季度冲突的本地匹配缓存');
@@ -4442,6 +4445,7 @@
             episodeTitle: episodeNumSelect.options[episodeNumSelect.selectedIndex].text,
             episodeIndex: episodeNumSelect.selectedIndex,
             bgmEpisodeIndex: episodeNumSelect.selectedIndex,
+            manualMatched: true, // 用户显式选择，自动匹配时跳过季度校验
             animeId: anime.animeId,
             animeTitle: anime.animeTitle,
             animeType: anime.type,
