@@ -3,7 +3,7 @@
 // @description  Emby弹幕插件 - Emby风格
 // @namespace    https://github.com/chen3861229/dd-danmaku
 // @author       chen3861229
-// @version      1.49
+// @version      1.50
 // @copyright    2022, RyoLee (https://github.com/RyoLee)
 // @license      MIT; https://raw.githubusercontent.com/RyoLee/emby-danmaku/master/LICENSE
 // @icon         https://github.githubassets.com/pinned-octocat.svg
@@ -23,7 +23,7 @@
     // note02: url 禁止使用相对路径,非 web 环境的根路径为文件路径,非 http
     // ------ 程序内部使用,请勿更改 start ------
     const openSourceLicense = {
-        self: { version: '1.49', name: 'Emby Danmaku Extension(Forked from original:1.11)', license: 'MIT License', url: 'https://github.com/chen3861229/dd-danmaku' },
+        self: { version: '1.50', name: 'Emby Danmaku Extension(Forked from original:1.11)', license: 'MIT License', url: 'https://github.com/chen3861229/dd-danmaku' },
         original: { version: '1.11', name: 'Emby Danmaku Extension', license: 'MIT License', url: 'https://github.com/RyoLee/emby-danmaku' },
         jellyfinFork: { version: '1.52', name: 'Jellyfin Danmaku Extension', license: 'MIT License', url: 'https://github.com/Izumiko/jellyfin-danmaku' },
         danmaku: { version: '2.0.8', name: 'Danmaku', license: 'MIT License', url: 'https://github.com/weizhenye/Danmaku' },
@@ -1171,7 +1171,9 @@
             console.log(`移除章节过滤,自动匹配成功,转换为目标章节索引 0`);
             if (isNaN(episodeIndex)) { episodeIndex = 0; }
             // const episodeInfo = animaInfo.animes[0].episodes[episodeIndex - 1 ?? 0];
-            const episodeInfo = animaInfo.animes[0].episodes[episodeIndex];
+            // [FIX 20260903] episodeIndex 是 1-based 集号，数组下标必须减 1（原写法把第3集取成
+            // 数组第4项，导致无职转生 S03E03 兜底命中第一季"第4话 紧急家族会议"）
+            const episodeInfo = animaInfo.animes[0].episodes[episodeIndex > 0 ? episodeIndex - 1 : 0];
             if (!episodeInfo) {
                 return null;
             }
@@ -1329,8 +1331,9 @@
                   return seasonMap[m[2]] || parseInt(m[2]);
               }
             },
-            // 罗马数字 Ⅰ-Ⅻ
-            { pattern: /^(.*?)\s*([Ⅰ-Ⅻ])$/,
+            // 罗马数字 Ⅰ-Ⅻ（支持中置+副标题：如"无职转生Ⅲ ～到了异世界就拿出真本事～"，副标题里的
+            // 核心标题会参与季度打分，不再要求季标必须在结尾）
+            { pattern: /^(.*?)\s*([Ⅰ-Ⅻ])(?:\s*(.*))?$/,
               handler: (m) => {
                   const romanMap = {'Ⅰ': 1, 'Ⅱ': 2, 'Ⅲ': 3, 'Ⅳ': 4, 'Ⅴ': 5, 'Ⅵ': 6, 'Ⅶ': 7, 'Ⅷ': 8, 'Ⅸ': 9, 'Ⅹ': 10, 'Ⅺ': 11, 'Ⅻ': 12};
                   return romanMap[m[2].toUpperCase()];
@@ -1741,6 +1744,26 @@
                 searchAnimaInfo.animes = prioritizeSeasonCandidates(episodeName, searchAnimaInfo.animes);
                 console.log(`[${config.name}] 不带集数搜索成功`);
                 return { animaInfo: searchAnimaInfo, apiPrefix: config.prefix };
+            }
+
+            // [FIX 20260903] 核心标题兜底：标题里中置的季标记（如"无职转生Ⅲ ～到了异世界就拿出真本事～"）
+            // 会让"第N季"/原始标题/SXXEXX 等所有搜索变体全空（弹弹play 搜不到 Ⅲ 命名）。此时退回
+            // 核心标题（"无职转生"）+ 集数重搜，弹弹play 会返回各季的第 N 话（episodes[0]），
+            // 再由 prioritizeSeasonCandidates 按季度把正确的季排到最前。
+            if (searchEpisode) {
+                const parsedCore = parseAnimeName(episodeName);
+                if (parsedCore.season !== null) {
+                    const coreTitle = parsedCore.title.split(/[～~·—:：,，,]/)[0].trim();
+                    if (coreTitle && coreTitle !== parsedCore.title && coreTitle.length >= 2) {
+                        console.log(`[自动匹配][${config.name}] 常规搜索全空，改用核心标题兜底: '${coreTitle}' 第${searchEpisode}话`);
+                        let coreInfo = await fetchSearchEpisodes(coreTitle, searchEpisode, config.prefix);
+                        if (coreInfo && coreInfo.animes.length > 0) {
+                            coreInfo.animes = prioritizeSeasonCandidates(searchTitle, coreInfo.animes);
+                            console.log(`[${config.name}] 核心标题兜底搜索成功，候选 ${coreInfo.animes.length} 个`);
+                            return { animaInfo: coreInfo, apiPrefix: config.prefix };
+                        }
+                    }
+                }
             }
         }
 
@@ -4352,6 +4375,22 @@
                 allAnimes.push(...animaInfo.animes);
             } else {
                 console.log(`[手动匹配][${config.name}] 未找到结果。`);
+                // [FIX 20260903] "第N季"变体也搜不到时（如 Ⅲ 中置命名的标题），用核心标题+集数兜底重搜
+                if (manualSearchEpisode) {
+                    const parsedCoreManual = parseAnimeName(searchName);
+                    if (parsedCoreManual.season !== null) {
+                        const coreTitleManual = parsedCoreManual.title.split(/[～~·—:：,，,]/)[0].trim();
+                        if (coreTitleManual && coreTitleManual !== parsedCoreManual.title && coreTitleManual.length >= 2) {
+                            console.log(`[手动匹配][${config.name}] 常规搜索全空，改用核心标题兜底: '${coreTitleManual}' 第${manualSearchEpisode}话`);
+                            const coreInfoManual = await fetchSearchEpisodes(coreTitleManual, manualSearchEpisode, config.prefix);
+                            if (coreInfoManual && coreInfoManual.animes.length > 0) {
+                                console.log(`[手动匹配][${config.name}] 核心标题兜底搜索成功，候选 ${coreInfoManual.animes.length} 个。`);
+                                coreInfoManual.animes.forEach(anime => { anime.apiPrefix = config.prefix; anime.apiName = config.name; });
+                                allAnimes.push(...coreInfoManual.animes);
+                            }
+                        }
+                    }
+                }
             }
         }
 
