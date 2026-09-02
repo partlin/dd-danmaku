@@ -3,7 +3,7 @@
 // @description  Emby弹幕插件 - Emby风格
 // @namespace    https://github.com/chen3861229/dd-danmaku
 // @author       chen3861229
-// @version      1.50
+// @version      1.53
 // @copyright    2022, RyoLee (https://github.com/RyoLee)
 // @license      MIT; https://raw.githubusercontent.com/RyoLee/emby-danmaku/master/LICENSE
 // @icon         https://github.githubassets.com/pinned-octocat.svg
@@ -23,9 +23,9 @@
     // note02: url 禁止使用相对路径,非 web 环境的根路径为文件路径,非 http
     // ------ 程序内部使用,请勿更改 start ------
     const openSourceLicense = {
-        self: { version: '1.50', name: 'Emby Danmaku Extension(Forked from original:1.11)', license: 'MIT License', url: 'https://github.com/chen3861229/dd-danmaku' },
+        self: { version: '1.53', name: 'Emby Danmaku Extension(Forked from original:1.11)', license: 'MIT License', url: 'https://github.com/chen3861229/dd-danmaku' },
         original: { version: '1.11', name: 'Emby Danmaku Extension', license: 'MIT License', url: 'https://github.com/RyoLee/emby-danmaku' },
-        jellyfinFork: { version: '1.52', name: 'Jellyfin Danmaku Extension', license: 'MIT License', url: 'https://github.com/Izumiko/jellyfin-danmaku' },
+        jellyfinFork: { version: '1.53', name: 'Jellyfin Danmaku Extension', license: 'MIT License', url: 'https://github.com/Izumiko/jellyfin-danmaku' },
         danmaku: { version: '2.0.8', name: 'Danmaku', license: 'MIT License', url: 'https://github.com/weizhenye/Danmaku' },
         dandanplayApi: { version: 'v2', name: '弹弹 play API', license: 'MIT License', url: 'https://github.com/kaedei/dandanplay-libraryindex' },
         dandanplayDoc: { version: 'PC', name: '赞助弹弹 play 官方', license: 'None', url: 'https://doc.dandanplay.com/other/donate.html' },
@@ -1102,6 +1102,7 @@
             seriesName,
             seasonNumber,
             episodeNumber,
+            itemName: item.Name, // Emby 侧集名/片名，用于媒体库XML弹幕的OSD标题
         };
     }
 
@@ -2328,7 +2329,17 @@
                             }
                             const videoOsdDanmakuTitle = getById(eleIds.videoOsdDanmakuTitle);
                             if (videoOsdDanmakuTitle && videoOsdDanmakuTitle.innerText.includes('未匹配')) {
-                                videoOsdDanmakuTitle.innerText = `弹幕：${lsKeys.useFetchPluginXml.name} - ${comments.length}条`;
+                                // 媒体库XML弹幕：标题标注来源与季集信息（与在线识别同款格式：番名 - 集标题 - N条）
+                                let xmlEpLabel = '媒体库XML';
+                                if (itemInfoMap) {
+                                    if (itemInfoMap.seriesName) {
+                                        xmlEpLabel += ` - ${itemInfoMap.seriesName}`;
+                                    }
+                                    if (itemInfoMap.itemName) {
+                                        xmlEpLabel += ` - ${itemInfoMap.itemName}`;
+                                    }
+                                }
+                                videoOsdDanmakuTitle.innerText = `弹幕：${xmlEpLabel} - ${comments.length}条`;
                             }
                         }).catch((error) => {
                             console.error(error);
