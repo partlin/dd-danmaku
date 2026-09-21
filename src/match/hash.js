@@ -6,6 +6,7 @@
 import { fetchMatchApi } from './search.js';
 import { selectBestMatch } from './fallback.js';
 import { isSeasonCompatible, prioritizeSeasonCandidates } from './season.js';
+import { isEpisodeCompatible } from './episode-number.js';
 
 /**
  * 简化的 MD5 实现（与 ede.js 保持一致）
@@ -101,6 +102,7 @@ export async function calculateFileHash(streamUrl, fileSize) {
 /**
  * 通过文件哈希尝试匹配
  * @param {string} animeName
+ * @param {number|string} expectedEpisodeNumber
  * @param {string} streamUrl
  * @param {number} size
  * @param {number} duration
@@ -108,7 +110,15 @@ export async function calculateFileHash(streamUrl, fileSize) {
  * @param {string[]} apiPriority
  * @returns {Promise<object|null>}
  */
-export async function tryMatchByHash(animeName, streamUrl, size, duration, apiConfigs, apiPriority) {
+export async function tryMatchByHash(
+    animeName,
+    expectedEpisodeNumber,
+    streamUrl,
+    size,
+    duration,
+    apiConfigs,
+    apiPriority
+) {
     const matchPayload = {
         fileName: animeName,
         fileHash: 'a1b2c3d4e5f67890abcd1234ef567890',
@@ -133,11 +143,13 @@ export async function tryMatchByHash(animeName, streamUrl, size, duration, apiCo
 
         if (matchResult?.isMatched && matchResult.animes?.length > 0) {
             const candidates = prioritizeSeasonCandidates(animeName, matchResult.animes);
-            const match = candidates.find((candidate) =>
-                isSeasonCompatible(animeName, candidate.animeTitle, candidate.type)
+            const match = candidates.find(
+                (candidate) =>
+                    isSeasonCompatible(animeName, candidate.animeTitle, candidate.type) &&
+                    isEpisodeCompatible(expectedEpisodeNumber, candidate, candidate.animeId)
             );
             if (!match) {
-                console.warn(`${config.name} /match 接口命中结果与当前季度冲突，放弃直接匹配`);
+                console.warn(`${config.name} /match 接口命中结果与当前季度或集数冲突，放弃直接匹配`);
                 continue;
             }
             console.log(`${config.name} /match 接口直接匹配成功`);
@@ -145,6 +157,7 @@ export async function tryMatchByHash(animeName, streamUrl, size, duration, apiCo
                 directMatch: true,
                 apiPrefix: config.prefix,
                 apiName: config.name,
+                expectedEpisodeNumber,
                 episodeInfo: {
                     ...match,
                     episodes: [{ episodeId: match.episodeId, episodeTitle: match.episodeTitle }],
@@ -155,12 +168,13 @@ export async function tryMatchByHash(animeName, streamUrl, size, duration, apiCo
 
         if (matchResult && !matchResult.isMatched && matchResult.animes?.length > 0) {
             console.log(`[${config.name}] /match 接口返回候选列表，尝试智能匹配...`);
-            const bestMatch = selectBestMatch(animeName, matchResult.animes);
+            const bestMatch = selectBestMatch(animeName, matchResult.animes, expectedEpisodeNumber);
             if (bestMatch) {
                 return {
                     directMatch: true,
                     apiPrefix: config.prefix,
                     apiName: config.name,
+                    expectedEpisodeNumber,
                     episodeInfo: {
                         ...bestMatch,
                         episodes: [{ episodeId: bestMatch.episodeId, episodeTitle: bestMatch.episodeTitle }],

@@ -1201,7 +1201,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     matchEpoch: '_ede_match_epoch'
   };
 
-  var MATCH_CACHE_EPOCH = '4';
+  var MATCH_CACHE_EPOCH = '5';
   function lsSetItem(id, value) {
     if (!lsGetKeyById(id)) {
       return;
@@ -2989,6 +2989,69 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
   }
 
   /**
+   * 自动匹配集号解析与严格校验。
+   * episodeId 规则：episodeId = animeId * 10000 + 集号；9000 以上为特典。
+   */
+
+  function toPositiveInteger(value) {
+    var number = Number(value);
+    return Number.isInteger(number) && number > 0 ? number : null;
+  }
+  function extractEpisodeNumberFromTitle(title) {
+    var value = String(title || '');
+    var patterns = [/第\s*(\d+)\s*[话話集]/i, /(?:^|\b)E(?:P(?:ISODE)?)?\s*0*(\d+)(?=\D|$)/i, /^\s*0*(\d+)(?=\s*(?:[-－:：.]|$))/];
+    for (var _i = 0, _patterns = patterns; _i < _patterns.length; _i++) {
+      var pattern = _patterns[_i];
+      var match = pattern.exec(value);
+      if (match) return toPositiveInteger(match[1]);
+    }
+    return null;
+  }
+
+  /**
+   * 汇总可用的集号来源。多个来源冲突时返回 invalid，避免近似结果被接受。
+   */
+  function inspectEpisodeNumber(episode, animeId) {
+    var sources = {};
+    var explicitNumber = toPositiveInteger(episode === null || episode === void 0 ? void 0 : episode.episodeNumber);
+    if (explicitNumber) sources.episodeNumber = explicitNumber;
+    var numericEpisodeId = Number(episode === null || episode === void 0 ? void 0 : episode.episodeId);
+    var numericAnimeId = Number(animeId !== null && animeId !== void 0 ? animeId : episode === null || episode === void 0 ? void 0 : episode.animeId);
+    if (Number.isFinite(numericEpisodeId) && Number.isFinite(numericAnimeId)) {
+      var offset = numericEpisodeId - numericAnimeId * 10000;
+      if (Number.isInteger(offset) && offset > 0 && offset < 9000) {
+        sources.episodeId = offset;
+      }
+    }
+    var titleNumber = extractEpisodeNumberFromTitle(episode === null || episode === void 0 ? void 0 : episode.episodeTitle);
+    if (titleNumber) sources.episodeTitle = titleNumber;
+    var numbers = _toConsumableArray(new Set(Object.values(sources)));
+    return {
+      number: numbers.length === 1 ? numbers[0] : null,
+      valid: numbers.length === 1,
+      conflict: numbers.length > 1,
+      sources: sources
+    };
+  }
+  function getEpisodeNumber(episode, animeId) {
+    return inspectEpisodeNumber(episode, animeId).number;
+  }
+  function isEpisodeCompatible(expectedEpisodeNumber, episode, animeId) {
+    if (expectedEpisodeNumber === 'movie') return true;
+    var expected = toPositiveInteger(expectedEpisodeNumber);
+    if (!expected) return false;
+    var inspected = inspectEpisodeNumber(episode, animeId);
+    return inspected.valid && inspected.number === expected;
+  }
+  function findCompatibleEpisode(episodes, animeId, expectedEpisodeNumber) {
+    if (!Array.isArray(episodes) || episodes.length === 0) return null;
+    if (expectedEpisodeNumber === 'movie') return episodes[0] || null;
+    return episodes.find(function (episode) {
+      return isEpisodeCompatible(expectedEpisodeNumber, episode, animeId);
+    }) || null;
+  }
+
+  /**
    * 排除特典集，只保留正片。
    * 若传入 animeId：按 episodeId 与 animeId 的关系（offset 1–8999 为正片，9xxx 为特典）过滤。
    * 若未传入 animeId：按原方案用标题排除（Sn/Cn 开头视为特典）。
@@ -3039,6 +3102,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
             console.log("[tmdbId\u5339\u914D] \u7535\u5F71\u5339\u914D\u6210\u529F: ".concat(firstAnime.animeTitle));
             return {
               directMatch: true,
+              expectedEpisodeNumber: 'movie',
               apiPrefix: config.prefix,
               apiName: config.name,
               episodeInfo: {
@@ -3099,9 +3163,15 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
           }
         }
         if (matchedEp && matchedAnime) {
+          var matchedEpisodeNumber = getEpisodeNumber(matchedEp, matchedAnime.animeId);
+          if (!matchedEpisodeNumber) {
+            console.warn('[tmdbId匹配] 无法确认返回集号，放弃该结果');
+            continue;
+          }
           console.log("[tmdbId\u5339\u914D] \u5B63\u5EA6\u5267\u96C6\u5339\u914D\u6210\u529F: ".concat(matchedAnime.animeTitle, " - ").concat(matchedEp.episodeTitle));
           return {
             directMatch: true,
+            expectedEpisodeNumber: matchedEpisodeNumber,
             apiPrefix: config.prefix,
             apiName: config.name,
             episodeInfo: {
@@ -3241,7 +3311,8 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     return {
       animeName: animeName,
       animaInfo: animaInfo,
-      animeOriginalTitle: animeOriginalTitle
+      animeOriginalTitle: animeOriginalTitle,
+      expectedEpisodeNumber: episodeIndex
     };
   }
 
@@ -3258,13 +3329,15 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var animaInfo = await fetchSearchEpisodes(animeName, null, prefix);
     if (!(animaInfo !== null && animaInfo !== void 0 && (_animaInfo$animes2 = animaInfo.animes) !== null && _animaInfo$animes2 !== void 0 && _animaInfo$animes2.length)) return null;
     console.log("\u79FB\u9664\u7AE0\u8282\u8FC7\u6EE4,\u81EA\u52A8\u5339\u914D\u6210\u529F,\u8F6C\u6362\u4E3A\u76EE\u6807\u7AE0\u8282\u7D22\u5F15 0");
-    var epIdx = isNaN(episodeIndex) ? 0 : episodeIndex;
-    var episodeInfo = animaInfo.animes[0].episodes[epIdx];
+    var anime = animaInfo.animes[0];
+    var expectedEpisodeNumber = isNaN(episodeIndex) ? 'movie' : Number(episodeIndex);
+    var episodeInfo = findCompatibleEpisode(anime.episodes, anime.animeId, expectedEpisodeNumber);
     if (!episodeInfo) return null;
-    animaInfo.animes[0].episodes = [episodeInfo];
+    anime.episodes = [episodeInfo];
     return {
       animeName: animeName,
-      animaInfo: animaInfo
+      animaInfo: animaInfo,
+      expectedEpisodeNumber: expectedEpisodeNumber
     };
   }
 
@@ -3272,10 +3345,10 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * 智能匹配：从候选列表中选择最佳匹配
    * @param {string} searchTitle
    * @param {object[]} candidates
-   * @param {string} prefix - API prefix for fetchSearchEpisodes
+   * @param {number|string|null} expectedEpisodeNumber
    * @returns {object|null}
    */
-  function selectBestMatch(searchTitle, candidates, prefix) {
+  function selectBestMatch(searchTitle, candidates, expectedEpisodeNumber) {
     var _bestMatch$score;
     if (!(candidates !== null && candidates !== void 0 && candidates.length)) return null;
     console.log("[\u667A\u80FD\u5339\u914D] \u641C\u7D22\u6807\u9898: \"".concat(searchTitle, "\", \u5019\u9009\u6570\u91CF: ").concat(candidates.length));
@@ -3291,22 +3364,14 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         score.total += 0.15;
         console.log("[\u667A\u80FD\u5339\u914D] \u5B63\u5EA6\u5339\u914D\u52A0\u5206: ".concat(candidate.animeTitle));
       }
-      if (parsedSearch.episode) {
-        var episodeMatched = false;
-        if (candidate.episodeId) {
-          var episodeFromId = parseInt(candidate.episodeId.toString().slice(-3), 10);
-          if (episodeFromId === parsedSearch.episode) {
-            score.total += 0.25;
-            episodeMatched = true;
-            console.log("[\u667A\u80FD\u5339\u914D] episodeId\u96C6\u6570\u5339\u914D\u52A0\u5206: ".concat(candidate.animeTitle, " (").concat(episodeFromId, ")"));
-          }
-        }
-        if (!episodeMatched && candidate.episodeTitle) {
-          var episodeMatch = candidate.episodeTitle.match(/第?(\d+)[话集]/);
-          if (episodeMatch && parseInt(episodeMatch[1], 10) === parsedSearch.episode) {
-            score.total += 0.2;
-            console.log("[\u667A\u80FD\u5339\u914D] episodeTitle\u96C6\u6570\u5339\u914D\u52A0\u5206: ".concat(candidate.animeTitle, " - ").concat(candidate.episodeTitle));
-          }
+      var targetEpisodeNumber = expectedEpisodeNumber !== null && expectedEpisodeNumber !== void 0 ? expectedEpisodeNumber : parsedSearch.episode;
+      if (targetEpisodeNumber && targetEpisodeNumber !== 'movie') {
+        if (!isEpisodeCompatible(targetEpisodeNumber, candidate, candidate.animeId)) {
+          score.total = -1;
+          console.log("[\u667A\u80FD\u5339\u914D] \u5FFD\u7565\u96C6\u6570\u4E0D\u7B26\u6216\u65E0\u6CD5\u786E\u8BA4\u7684\u5019\u9009: ".concat(candidate.animeTitle, " - ").concat(candidate.episodeTitle || ''));
+        } else {
+          score.total += 0.25;
+          console.log("[\u667A\u80FD\u5339\u914D] \u96C6\u6570\u4E25\u683C\u5339\u914D: ".concat(candidate.animeTitle, " (").concat(getEpisodeNumber(candidate, candidate.animeId), ")"));
         }
       }
       console.log("[\u667A\u80FD\u5339\u914D] \"".concat(candidate.animeTitle, "\" (").concat(candidate.typeDescription || '', ") - \u5F97\u5206: ").concat(score.total.toFixed(2)));
@@ -3456,6 +3521,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
   /**
    * 通过文件哈希尝试匹配
    * @param {string} animeName
+   * @param {number|string} expectedEpisodeNumber
    * @param {string} streamUrl
    * @param {number} size
    * @param {number} duration
@@ -3463,7 +3529,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {string[]} apiPriority
    * @returns {Promise<object|null>}
    */
-  async function tryMatchByHash(animeName, streamUrl, size, duration, apiConfigs, apiPriority) {
+  async function tryMatchByHash(animeName, expectedEpisodeNumber, streamUrl, size, duration, apiConfigs, apiPriority) {
     var matchPayload = {
       fileName: animeName,
       fileHash: 'a1b2c3d4e5f67890abcd1234ef567890',
@@ -3490,10 +3556,10 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         if (matchResult !== null && matchResult !== void 0 && matchResult.isMatched && ((_matchResult$animes = matchResult.animes) === null || _matchResult$animes === void 0 ? void 0 : _matchResult$animes.length) > 0) {
           var candidates = prioritizeSeasonCandidates(animeName, matchResult.animes);
           var match = candidates.find(function (candidate) {
-            return isSeasonCompatible(animeName, candidate.animeTitle, candidate.type);
+            return isSeasonCompatible(animeName, candidate.animeTitle, candidate.type) && isEpisodeCompatible(expectedEpisodeNumber, candidate, candidate.animeId);
           });
           if (!match) {
-            console.warn("".concat(config.name, " /match \u63A5\u53E3\u547D\u4E2D\u7ED3\u679C\u4E0E\u5F53\u524D\u5B63\u5EA6\u51B2\u7A81\uFF0C\u653E\u5F03\u76F4\u63A5\u5339\u914D"));
+            console.warn("".concat(config.name, " /match \u63A5\u53E3\u547D\u4E2D\u7ED3\u679C\u4E0E\u5F53\u524D\u5B63\u5EA6\u6216\u96C6\u6570\u51B2\u7A81\uFF0C\u653E\u5F03\u76F4\u63A5\u5339\u914D"));
             continue;
           }
           console.log("".concat(config.name, " /match \u63A5\u53E3\u76F4\u63A5\u5339\u914D\u6210\u529F"));
@@ -3501,6 +3567,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
             directMatch: true,
             apiPrefix: config.prefix,
             apiName: config.name,
+            expectedEpisodeNumber: expectedEpisodeNumber,
             episodeInfo: _objectSpread2(_objectSpread2({}, match), {}, {
               episodes: [{
                 episodeId: match.episodeId,
@@ -3512,12 +3579,13 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         }
         if (matchResult && !matchResult.isMatched && ((_matchResult$animes2 = matchResult.animes) === null || _matchResult$animes2 === void 0 ? void 0 : _matchResult$animes2.length) > 0) {
           console.log("[".concat(config.name, "] /match \u63A5\u53E3\u8FD4\u56DE\u5019\u9009\u5217\u8868\uFF0C\u5C1D\u8BD5\u667A\u80FD\u5339\u914D..."));
-          var bestMatch = selectBestMatch(animeName, matchResult.animes);
+          var bestMatch = selectBestMatch(animeName, matchResult.animes, expectedEpisodeNumber);
           if (bestMatch) {
             return {
               directMatch: true,
               apiPrefix: config.prefix,
               apiName: config.name,
+              expectedEpisodeNumber: expectedEpisodeNumber,
               episodeInfo: _objectSpread2(_objectSpread2({}, bestMatch), {}, {
                 episodes: [{
                   episodeId: bestMatch.episodeId,
@@ -3535,6 +3603,13 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       _iterator.f();
     }
     return null;
+  }
+
+  function hasCompatibleEpisode(animaInfo, expectedEpisodeNumber) {
+    var _animaInfo$animes;
+    return Boolean(animaInfo === null || animaInfo === void 0 || (_animaInfo$animes = animaInfo.animes) === null || _animaInfo$animes === void 0 ? void 0 : _animaInfo$animes.some(function (anime) {
+      return findCompatibleEpisode(anime.episodes, anime.animeId, expectedEpisodeNumber);
+    }));
   }
 
   /**
@@ -3608,7 +3683,8 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       }
       return {
         animaInfo: animaInfo,
-        newEpisode: newEpisode
+        newEpisode: newEpisode,
+        expectedEpisodeNumber: newEpisode
       };
     }
     return null;
@@ -3620,7 +3696,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @returns {Promise<object|null>}
    */
   async function searchEpisodes(itemInfoMap) {
-    var _apiConfigs$custom$pr, _apiConfigs$currentPr, _animaRes$animaInfo, _animaInfo$animes;
+    var _apiConfigs$custom$pr, _apiConfigs$currentPr, _animaRes$animaInfo, _animaInfo$animes2;
     var _season_key = itemInfoMap._season_key,
       animeName = itemInfoMap.animeName,
       episodeName = itemInfoMap.episodeName,
@@ -3646,16 +3722,17 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var currentPriority = Array.isArray(apiPriority) && apiPriority[0] === 'custom' && apiConfigs.custom.enabled && (_apiConfigs$custom$pr = apiConfigs.custom.prefix) !== null && _apiConfigs$custom$pr !== void 0 && _apiConfigs$custom$pr.trim() ? 'custom' : 'official';
     var selectedApiConfig = apiConfigs[currentPriority].enabled && (_apiConfigs$currentPr = apiConfigs[currentPriority].prefix) !== null && _apiConfigs$currentPr !== void 0 && _apiConfigs$currentPr.trim() ? apiConfigs[currentPriority] : apiConfigs.custom;
     var animaRes = await lsSeasonSearchEpisodes(_season_key, episode, selectedApiConfig.prefix, animeName);
-    if ((animaRes === null || animaRes === void 0 || (_animaRes$animaInfo = animaRes.animaInfo) === null || _animaRes$animaInfo === void 0 || (_animaRes$animaInfo = _animaRes$animaInfo.animes) === null || _animaRes$animaInfo === void 0 ? void 0 : _animaRes$animaInfo.length) > 0) {
+    if ((animaRes === null || animaRes === void 0 || (_animaRes$animaInfo = animaRes.animaInfo) === null || _animaRes$animaInfo === void 0 || (_animaRes$animaInfo = _animaRes$animaInfo.animes) === null || _animaRes$animaInfo === void 0 ? void 0 : _animaRes$animaInfo.length) > 0 && hasCompatibleEpisode(animaRes.animaInfo, animaRes.expectedEpisodeNumber)) {
       console.log("[\u81EA\u52A8\u5339\u914D] \u547D\u4E2D\u8D5B\u5B63\u7F13\u5B58\uFF0C\u76F4\u63A5\u4F7F\u7528");
       return {
         animeOriginalTitle: '',
-        animaInfo: animaRes.animaInfo
+        animaInfo: animaRes.animaInfo,
+        expectedEpisodeNumber: animaRes.expectedEpisodeNumber
       };
     }
     var tmdbMatchResult = await tryMatchByTmdbId(itemInfoMap, apiConfigs, apiPriority);
     if (tmdbMatchResult) return tmdbMatchResult;
-    var hashMatchResult = await tryMatchByHash(episodeName, streamUrl, size, duration, apiConfigs, apiPriority);
+    var hashMatchResult = await tryMatchByHash(episodeName, episode, streamUrl, size, duration, apiConfigs, apiPriority);
     if (hashMatchResult) return hashMatchResult;
     var _iterator = _createForOfIteratorHelper(apiPriority),
       _step;
@@ -3676,19 +3753,21 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
           }
         }
         var searchAnimaInfo = await fetchSearchEpisodes(searchTitle, searchEpisode, config.prefix);
-        if (((_searchAnimaInfo = searchAnimaInfo) === null || _searchAnimaInfo === void 0 || (_searchAnimaInfo = _searchAnimaInfo.animes) === null || _searchAnimaInfo === void 0 ? void 0 : _searchAnimaInfo.length) > 0) {
+        if (((_searchAnimaInfo = searchAnimaInfo) === null || _searchAnimaInfo === void 0 || (_searchAnimaInfo = _searchAnimaInfo.animes) === null || _searchAnimaInfo === void 0 ? void 0 : _searchAnimaInfo.length) > 0 && hasCompatibleEpisode(searchAnimaInfo, searchEpisode)) {
           searchAnimaInfo.animes = prioritizeSeasonCandidates(searchTitle, searchAnimaInfo.animes);
           return {
             animaInfo: searchAnimaInfo,
-            apiPrefix: config.prefix
+            apiPrefix: config.prefix,
+            expectedEpisodeNumber: searchEpisode
           };
         }
         searchAnimaInfo = await fetchSearchEpisodes(episodeName, null, config.prefix);
-        if (((_searchAnimaInfo2 = searchAnimaInfo) === null || _searchAnimaInfo2 === void 0 || (_searchAnimaInfo2 = _searchAnimaInfo2.animes) === null || _searchAnimaInfo2 === void 0 ? void 0 : _searchAnimaInfo2.length) > 0) {
+        if (((_searchAnimaInfo2 = searchAnimaInfo) === null || _searchAnimaInfo2 === void 0 || (_searchAnimaInfo2 = _searchAnimaInfo2.animes) === null || _searchAnimaInfo2 === void 0 ? void 0 : _searchAnimaInfo2.length) > 0 && hasCompatibleEpisode(searchAnimaInfo, episode)) {
           searchAnimaInfo.animes = prioritizeSeasonCandidates(episodeName, searchAnimaInfo.animes);
           return {
             animaInfo: searchAnimaInfo,
-            apiPrefix: config.prefix
+            apiPrefix: config.prefix,
+            expectedEpisodeNumber: episode
           };
         }
       }
@@ -3698,11 +3777,12 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       _iterator.f();
     }
     var animaInfo = await fetchSearchEpisodes(animeName, episode, selectedApiConfig.prefix);
-    if ((animaInfo === null || animaInfo === void 0 || (_animaInfo$animes = animaInfo.animes) === null || _animaInfo$animes === void 0 ? void 0 : _animaInfo$animes.length) > 0) {
+    if ((animaInfo === null || animaInfo === void 0 || (_animaInfo$animes2 = animaInfo.animes) === null || _animaInfo$animes2 === void 0 ? void 0 : _animaInfo$animes2.length) > 0 && hasCompatibleEpisode(animaInfo, episode)) {
       animaInfo.animes = prioritizeSeasonCandidates(animeName, animaInfo.animes);
       return {
         animeOriginalTitle: '',
-        animaInfo: animaInfo
+        animaInfo: animaInfo,
+        expectedEpisodeNumber: episode
       };
     }
     return autoFailback(animeName, episode, seriesOrMovieId, selectedApiConfig.prefix);
@@ -3714,7 +3794,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @returns {Promise<object|null>}
    */
   async function getEpisodeInfo() {
-    var _window$ede2, _res$animaInfo;
+    var _window$ede2, _res$expectedEpisodeN, _res$animaInfo;
     var is_auto = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : true;
     var appendvideoOsdDanmakuInfo = arguments.length > 1 ? arguments[1] : undefined;
     var itemInfoMap = await getMapByEmbyItemInfo();
@@ -3762,7 +3842,11 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         var cachedEpisodeInfo = JSON.parse(window.localStorage.getItem(unique_episode_key));
         var cachedEpisodeNumber = (Number.isFinite(Number(cachedEpisodeInfo.episodeIndex)) ? Number(cachedEpisodeInfo.episodeIndex) : -1) + 1;
         var seasonCompatible = isSeasonCompatible(animeName, cachedEpisodeInfo.animeTitle, cachedEpisodeInfo.animeType);
-        var episodeCompatible = !Number.isFinite(Number(episode)) || cachedEpisodeNumber === Number(episode);
+        var isMovie = episode === 'movie';
+        var _sourceEpisodeNumber = isMovie ? cachedEpisodeInfo.sourceEpisodeNumber : Number(cachedEpisodeInfo.sourceEpisodeNumber);
+        var _expectedEpisodeNumber = isMovie ? cachedEpisodeInfo.expectedEpisodeNumber : Number(cachedEpisodeInfo.expectedEpisodeNumber);
+        var _matchedEpisodeNumber = isMovie ? cachedEpisodeInfo.matchedEpisodeNumber : Number(cachedEpisodeInfo.matchedEpisodeNumber);
+        var episodeCompatible = isMovie ? _sourceEpisodeNumber === 'movie' && _expectedEpisodeNumber === 'movie' && _matchedEpisodeNumber === 'movie' : _sourceEpisodeNumber === Number(episode) && Number.isInteger(_expectedEpisodeNumber) && _matchedEpisodeNumber === _expectedEpisodeNumber;
         if (seasonCompatible && episodeCompatible) return cachedEpisodeInfo;
         console.warn("[\u81EA\u52A8\u5339\u914D] \u7F13\u5B58\u4E0E\u5F53\u524D\u5B63\u5EA6\u6216\u96C6\u6570\u4E0D\u7B26\uFF0C\u6E05\u9664\u91CD\u641C: \u7F13\u5B58\u7B2C".concat(cachedEpisodeNumber, "\u8BDD, \u5F53\u524D\u7B2C").concat(episode, "\u8BDD"));
         window.localStorage.removeItem(unique_episode_key);
@@ -3793,7 +3877,10 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
             animeType: previous_info.animeType,
             imageUrl: previous_info.imageUrl,
             seriesOrMovieId: seriesOrMovieId,
-            episodeIndex: currentEpisodeNumber - 1
+            episodeIndex: currentEpisodeNumber - 1,
+            sourceEpisodeNumber: currentEpisodeNumber,
+            expectedEpisodeNumber: currentEpisodeNumber,
+            matchedEpisodeNumber: currentEpisodeNumber
           });
         }
       }
@@ -3807,21 +3894,33 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       return null;
     }
     var episodeIndex = isNaN(episode) ? 0 : episode - 1;
+    var sourceEpisodeNumber = episode === 'movie' ? 'movie' : Number(episode);
+    var expectedEpisodeNumber = (_res$expectedEpisodeN = res.expectedEpisodeNumber) !== null && _res$expectedEpisodeN !== void 0 ? _res$expectedEpisodeN : sourceEpisodeNumber;
     if (res.directMatch && res.episodeInfo) {
       var _res$episodeInfo$epis;
       var _ep = ((_res$episodeInfo$epis = res.episodeInfo.episodes) === null || _res$episodeInfo$epis === void 0 ? void 0 : _res$episodeInfo$epis[0]) || res.episodeInfo;
+      var _animeId = res.episodeInfo.animeId;
+      if (!isEpisodeCompatible(expectedEpisodeNumber, _ep, _animeId)) {
+        console.warn("[\u81EA\u52A8\u5339\u914D] \u76F4\u63A5\u5339\u914D\u7ED3\u679C\u96C6\u6570\u4E0D\u7B26\u6216\u65E0\u6CD5\u786E\u8BA4\uFF0C\u62D2\u7EDD: \u76EE\u6807\u7B2C".concat(expectedEpisodeNumber, "\u8BDD, \u8FD4\u56DE ").concat(_ep.episodeTitle || _ep.episodeId || '未知'));
+        if (typeof appendvideoOsdDanmakuInfo === 'function') appendvideoOsdDanmakuInfo();
+        return null;
+      }
+      var _matchedEpisodeNumber2 = expectedEpisodeNumber === 'movie' ? 'movie' : getEpisodeNumber(_ep, _animeId);
       var _episodeInfo = {
         episodeId: _ep.episodeId,
         episodeTitle: _ep.episodeTitle,
         episodeIndex: episodeIndex,
-        animeId: res.episodeInfo.animeId,
+        animeId: _animeId,
         animeTitle: res.episodeInfo.animeTitle,
         animeType: res.episodeInfo.animeType || res.episodeInfo.type,
         animeOriginalTitle: '',
         imageUrl: res.episodeInfo.imageUrl,
         apiName: res.apiName,
         apiPrefix: res.apiPrefix,
-        seriesOrMovieId: seriesOrMovieId
+        seriesOrMovieId: seriesOrMovieId,
+        sourceEpisodeNumber: sourceEpisodeNumber,
+        expectedEpisodeNumber: expectedEpisodeNumber,
+        matchedEpisodeNumber: _matchedEpisodeNumber2
       };
       window.localStorage.setItem(unique_episode_key, JSON.stringify(_episodeInfo));
       return _episodeInfo;
@@ -3833,24 +3932,44 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var _res$animeOriginalTit = res.animeOriginalTitle,
       animeOriginalTitle = _res$animeOriginalTit === void 0 ? '' : _res$animeOriginalTit,
       animaInfo = res.animaInfo;
-    var selectAnime_id = animaInfo.animes.findIndex(function (candidate) {
+    var compatibleAnimes = animaInfo.animes.filter(function (candidate) {
       return isSeasonCompatible(animeName, candidate.animeTitle, candidate.type);
     });
-    if (selectAnime_id < 0) {
+    if (compatibleAnimes.length === 0) {
       console.warn('[自动匹配] 搜索结果均与当前季度冲突，放弃自动匹配');
       if (typeof appendvideoOsdDanmakuInfo === 'function') appendvideoOsdDanmakuInfo();
       return null;
     }
     if (animeId != -1) {
-      var idx = animaInfo.animes.findIndex(function (a) {
-        return a.animeId == animeId && isSeasonCompatible(animeName, a.animeTitle, a.type);
+      compatibleAnimes.sort(function (a, b) {
+        return Number(b.animeId == animeId) - Number(a.animeId == animeId);
       });
-      if (idx >= 0) selectAnime_id = idx;
     }
-    var anime = animaInfo.animes[selectAnime_id];
-    var eps = (anime === null || anime === void 0 ? void 0 : anime.episodes) || [];
-    var ep = eps[episodeIndex] || eps[0];
-    if (!ep) return null;
+    var anime = null;
+    var ep = null;
+    var _iterator = _createForOfIteratorHelper(compatibleAnimes),
+      _step;
+    try {
+      for (_iterator.s(); !(_step = _iterator.n()).done;) {
+        var candidate = _step.value;
+        var matched = findCompatibleEpisode(candidate.episodes, candidate.animeId, expectedEpisodeNumber);
+        if (matched) {
+          anime = candidate;
+          ep = matched;
+          break;
+        }
+      }
+    } catch (err) {
+      _iterator.e(err);
+    } finally {
+      _iterator.f();
+    }
+    if (!anime || !ep) {
+      console.warn("[\u81EA\u52A8\u5339\u914D] \u672A\u627E\u5230\u53EF\u786E\u8BA4\u7684\u7B2C".concat(expectedEpisodeNumber, "\u8BDD\uFF0C\u653E\u5F03\u81EA\u52A8\u5339\u914D"));
+      if (typeof appendvideoOsdDanmakuInfo === 'function') appendvideoOsdDanmakuInfo();
+      return null;
+    }
+    var matchedEpisodeNumber = expectedEpisodeNumber === 'movie' ? 'movie' : getEpisodeNumber(ep, anime.animeId);
     var episodeInfo = {
       episodeId: ep.episodeId,
       episodeTitle: ep.episodeTitle,
@@ -3861,7 +3980,10 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       animeOriginalTitle: animeOriginalTitle,
       imageUrl: anime.imageUrl || (anime.animeId ? dandanplayApi.posterImg(anime.animeId) : undefined),
       apiPrefix: res.apiPrefix,
-      seriesOrMovieId: seriesOrMovieId
+      seriesOrMovieId: seriesOrMovieId,
+      sourceEpisodeNumber: sourceEpisodeNumber,
+      expectedEpisodeNumber: expectedEpisodeNumber,
+      matchedEpisodeNumber: matchedEpisodeNumber
     };
     window.localStorage.setItem(unique_episode_key, JSON.stringify(episodeInfo));
     return episodeInfo;

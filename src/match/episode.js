@@ -14,6 +14,15 @@ import {
     prioritizeSeasonCandidates,
     selectSeasonInfo,
 } from './season.js';
+import { findCompatibleEpisode } from './episode-number.js';
+
+function hasCompatibleEpisode(animaInfo, expectedEpisodeNumber) {
+    return Boolean(
+        animaInfo?.animes?.some((anime) =>
+            findCompatibleEpisode(anime.episodes, anime.animeId, expectedEpisodeNumber)
+        )
+    );
+}
 
 /**
  * 写入赛季信息到 localStorage
@@ -84,7 +93,7 @@ export async function lsSeasonSearchEpisodes(_season_key, episode, prefix, searc
                 animaInfo.animes.unshift(animaInfo.animes.splice(selectedAnimeIndex, 1)[0]);
             }
         }
-        return { animaInfo, newEpisode };
+        return { animaInfo, newEpisode, expectedEpisodeNumber: newEpisode };
     }
     return null;
 }
@@ -140,15 +149,30 @@ export async function searchEpisodes(itemInfoMap) {
         selectedApiConfig.prefix,
         animeName
     );
-    if (animaRes?.animaInfo?.animes?.length > 0) {
+    if (
+        animaRes?.animaInfo?.animes?.length > 0 &&
+        hasCompatibleEpisode(animaRes.animaInfo, animaRes.expectedEpisodeNumber)
+    ) {
         console.log(`[自动匹配] 命中赛季缓存，直接使用`);
-        return { animeOriginalTitle: '', animaInfo: animaRes.animaInfo };
+        return {
+            animeOriginalTitle: '',
+            animaInfo: animaRes.animaInfo,
+            expectedEpisodeNumber: animaRes.expectedEpisodeNumber,
+        };
     }
 
     const tmdbMatchResult = await tryMatchByTmdbId(itemInfoMap, apiConfigs, apiPriority);
     if (tmdbMatchResult) return tmdbMatchResult;
 
-    const hashMatchResult = await tryMatchByHash(episodeName, streamUrl, size, duration, apiConfigs, apiPriority);
+    const hashMatchResult = await tryMatchByHash(
+        episodeName,
+        episode,
+        streamUrl,
+        size,
+        duration,
+        apiConfigs,
+        apiPriority
+    );
     if (hashMatchResult) return hashMatchResult;
 
     for (const apiKey of apiPriority) {
@@ -168,22 +192,36 @@ export async function searchEpisodes(itemInfoMap) {
         }
 
         let searchAnimaInfo = await fetchSearchEpisodes(searchTitle, searchEpisode, config.prefix);
-        if (searchAnimaInfo?.animes?.length > 0) {
+        if (
+            searchAnimaInfo?.animes?.length > 0 &&
+            hasCompatibleEpisode(searchAnimaInfo, searchEpisode)
+        ) {
             searchAnimaInfo.animes = prioritizeSeasonCandidates(searchTitle, searchAnimaInfo.animes);
-            return { animaInfo: searchAnimaInfo, apiPrefix: config.prefix };
+            return {
+                animaInfo: searchAnimaInfo,
+                apiPrefix: config.prefix,
+                expectedEpisodeNumber: searchEpisode,
+            };
         }
 
         searchAnimaInfo = await fetchSearchEpisodes(episodeName, null, config.prefix);
-        if (searchAnimaInfo?.animes?.length > 0) {
+        if (
+            searchAnimaInfo?.animes?.length > 0 &&
+            hasCompatibleEpisode(searchAnimaInfo, episode)
+        ) {
             searchAnimaInfo.animes = prioritizeSeasonCandidates(episodeName, searchAnimaInfo.animes);
-            return { animaInfo: searchAnimaInfo, apiPrefix: config.prefix };
+            return {
+                animaInfo: searchAnimaInfo,
+                apiPrefix: config.prefix,
+                expectedEpisodeNumber: episode,
+            };
         }
     }
 
     const animaInfo = await fetchSearchEpisodes(animeName, episode, selectedApiConfig.prefix);
-    if (animaInfo?.animes?.length > 0) {
+    if (animaInfo?.animes?.length > 0 && hasCompatibleEpisode(animaInfo, episode)) {
         animaInfo.animes = prioritizeSeasonCandidates(animeName, animaInfo.animes);
-        return { animeOriginalTitle: '', animaInfo };
+        return { animeOriginalTitle: '', animaInfo, expectedEpisodeNumber: episode };
     }
 
     return autoFailback(animeName, episode, seriesOrMovieId, selectedApiConfig.prefix);

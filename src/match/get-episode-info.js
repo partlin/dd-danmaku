@@ -9,6 +9,11 @@ import { getMapByEmbyItemInfo } from './emby-item.js';
 import { searchEpisodes } from './episode.js';
 import { fetchComment } from './search.js';
 import { isSeasonCompatible } from './season.js';
+import {
+    findCompatibleEpisode,
+    getEpisodeNumber,
+    isEpisodeCompatible,
+} from './episode-number.js';
 
 /**
  * @param {boolean} [is_auto=true]
@@ -65,7 +70,23 @@ export async function getEpisodeInfo(is_auto = true, appendvideoOsdDanmakuInfo) 
                 cachedEpisodeInfo.animeTitle,
                 cachedEpisodeInfo.animeType
             );
-            const episodeCompatible = !Number.isFinite(Number(episode)) || cachedEpisodeNumber === Number(episode);
+            const isMovie = episode === 'movie';
+            const sourceEpisodeNumber = isMovie
+                ? cachedEpisodeInfo.sourceEpisodeNumber
+                : Number(cachedEpisodeInfo.sourceEpisodeNumber);
+            const expectedEpisodeNumber = isMovie
+                ? cachedEpisodeInfo.expectedEpisodeNumber
+                : Number(cachedEpisodeInfo.expectedEpisodeNumber);
+            const matchedEpisodeNumber = isMovie
+                ? cachedEpisodeInfo.matchedEpisodeNumber
+                : Number(cachedEpisodeInfo.matchedEpisodeNumber);
+            const episodeCompatible = isMovie
+                ? sourceEpisodeNumber === 'movie' &&
+                  expectedEpisodeNumber === 'movie' &&
+                  matchedEpisodeNumber === 'movie'
+                : sourceEpisodeNumber === Number(episode) &&
+                  Number.isInteger(expectedEpisodeNumber) &&
+                  matchedEpisodeNumber === expectedEpisodeNumber;
             if (seasonCompatible && episodeCompatible) return cachedEpisodeInfo;
             console.warn(
                 `[自动匹配] 缓存与当前季度或集数不符，清除重搜: 缓存第${cachedEpisodeNumber}话, 当前第${episode}话`
@@ -108,6 +129,9 @@ export async function getEpisodeInfo(is_auto = true, appendvideoOsdDanmakuInfo) 
                     imageUrl: previous_info.imageUrl,
                     seriesOrMovieId,
                     episodeIndex: currentEpisodeNumber - 1,
+                    sourceEpisodeNumber: currentEpisodeNumber,
+                    expectedEpisodeNumber: currentEpisodeNumber,
+                    matchedEpisodeNumber: currentEpisodeNumber,
                 };
             }
         }
@@ -124,14 +148,26 @@ export async function getEpisodeInfo(is_auto = true, appendvideoOsdDanmakuInfo) 
     }
 
     const episodeIndex = isNaN(episode) ? 0 : episode - 1;
+    const sourceEpisodeNumber = episode === 'movie' ? 'movie' : Number(episode);
+    const expectedEpisodeNumber = res.expectedEpisodeNumber ?? sourceEpisodeNumber;
 
     if (res.directMatch && res.episodeInfo) {
         const ep = res.episodeInfo.episodes?.[0] || res.episodeInfo;
+        const animeId = res.episodeInfo.animeId;
+        if (!isEpisodeCompatible(expectedEpisodeNumber, ep, animeId)) {
+            console.warn(
+                `[自动匹配] 直接匹配结果集数不符或无法确认，拒绝: 目标第${expectedEpisodeNumber}话, 返回 ${ep.episodeTitle || ep.episodeId || '未知'}`
+            );
+            if (typeof appendvideoOsdDanmakuInfo === 'function') appendvideoOsdDanmakuInfo();
+            return null;
+        }
+        const matchedEpisodeNumber =
+            expectedEpisodeNumber === 'movie' ? 'movie' : getEpisodeNumber(ep, animeId);
         const episodeInfo = {
             episodeId: ep.episodeId,
             episodeTitle: ep.episodeTitle,
             episodeIndex,
-            animeId: res.episodeInfo.animeId,
+            animeId,
             animeTitle: res.episodeInfo.animeTitle,
             animeType: res.episodeInfo.animeType || res.episodeInfo.type,
             animeOriginalTitle: '',
@@ -139,6 +175,9 @@ export async function getEpisodeInfo(is_auto = true, appendvideoOsdDanmakuInfo) 
             apiName: res.apiName,
             apiPrefix: res.apiPrefix,
             seriesOrMovieId,
+            sourceEpisodeNumber,
+            expectedEpisodeNumber,
+            matchedEpisodeNumber,
         };
         window.localStorage.setItem(unique_episode_key, JSON.stringify(episodeInfo));
         return episodeInfo;
@@ -150,24 +189,38 @@ export async function getEpisodeInfo(is_auto = true, appendvideoOsdDanmakuInfo) 
     }
 
     const { animeOriginalTitle = '', animaInfo } = res;
-    let selectAnime_id = animaInfo.animes.findIndex((candidate) =>
+    const compatibleAnimes = animaInfo.animes.filter((candidate) =>
         isSeasonCompatible(animeName, candidate.animeTitle, candidate.type)
     );
-    if (selectAnime_id < 0) {
+    if (compatibleAnimes.length === 0) {
         console.warn('[自动匹配] 搜索结果均与当前季度冲突，放弃自动匹配');
         if (typeof appendvideoOsdDanmakuInfo === 'function') appendvideoOsdDanmakuInfo();
         return null;
     }
     if (animeId != -1) {
-        const idx = animaInfo.animes.findIndex(
-            (a) => a.animeId == animeId && isSeasonCompatible(animeName, a.animeTitle, a.type)
-        );
-        if (idx >= 0) selectAnime_id = idx;
+        compatibleAnimes.sort((a, b) => Number(b.animeId == animeId) - Number(a.animeId == animeId));
     }
-    const anime = animaInfo.animes[selectAnime_id];
-    const eps = anime?.episodes || [];
-    const ep = eps[episodeIndex] || eps[0];
-    if (!ep) return null;
+    let anime = null;
+    let ep = null;
+    for (const candidate of compatibleAnimes) {
+        const matched = findCompatibleEpisode(
+            candidate.episodes,
+            candidate.animeId,
+            expectedEpisodeNumber
+        );
+        if (matched) {
+            anime = candidate;
+            ep = matched;
+            break;
+        }
+    }
+    if (!anime || !ep) {
+        console.warn(`[自动匹配] 未找到可确认的第${expectedEpisodeNumber}话，放弃自动匹配`);
+        if (typeof appendvideoOsdDanmakuInfo === 'function') appendvideoOsdDanmakuInfo();
+        return null;
+    }
+    const matchedEpisodeNumber =
+        expectedEpisodeNumber === 'movie' ? 'movie' : getEpisodeNumber(ep, anime.animeId);
 
     const episodeInfo = {
         episodeId: ep.episodeId,
@@ -180,6 +233,9 @@ export async function getEpisodeInfo(is_auto = true, appendvideoOsdDanmakuInfo) 
         imageUrl: anime.imageUrl || (anime.animeId ? dandanplayApi.posterImg(anime.animeId) : undefined),
         apiPrefix: res.apiPrefix,
         seriesOrMovieId,
+        sourceEpisodeNumber,
+        expectedEpisodeNumber,
+        matchedEpisodeNumber,
     };
     window.localStorage.setItem(unique_episode_key, JSON.stringify(episodeInfo));
     return episodeInfo;

@@ -23,6 +23,12 @@ export { parseAnimeName, lsSeasonSearchEpisodes, searchEpisodes, writeLsSeasonIn
 export { getEpisodeInfo } from './get-episode-info.js';
 export { getMapByEmbyItemInfo } from './emby-item.js';
 export {
+    inspectEpisodeNumber,
+    getEpisodeNumber,
+    isEpisodeCompatible,
+    findCompatibleEpisode,
+} from './episode-number.js';
+export {
     isSpecialAnimeType,
     getSeasonMatchScore,
     isSeasonCompatible,

@@ -11,6 +11,11 @@ import {
     extractKeywords,
 } from './similarity.js';
 import { getSeasonMatchScore } from './season.js';
+import {
+    findCompatibleEpisode,
+    getEpisodeNumber,
+    isEpisodeCompatible,
+} from './episode-number.js';
 
 /**
  * @param {string} animeName
@@ -41,7 +46,7 @@ export async function oriTitleAutoFailback(animeName, episodeIndex, animeOrigina
     const animaInfo = await fetchSearchEpisodes(animeOriginalTitle, episodeIndex, prefix);
     if (!animaInfo?.animes?.length) return null;
     console.log(`使用原标题名: ${animeOriginalTitle},自动匹配成功`);
-    return { animeName, animaInfo, animeOriginalTitle };
+    return { animeName, animaInfo, animeOriginalTitle, expectedEpisodeNumber: episodeIndex };
 }
 
 /**
@@ -56,21 +61,26 @@ export async function movieAutoFailback(animeName, episodeIndex, prefix) {
     const animaInfo = await fetchSearchEpisodes(animeName, null, prefix);
     if (!animaInfo?.animes?.length) return null;
     console.log(`移除章节过滤,自动匹配成功,转换为目标章节索引 0`);
-    const epIdx = isNaN(episodeIndex) ? 0 : episodeIndex;
-    const episodeInfo = animaInfo.animes[0].episodes[epIdx];
+    const anime = animaInfo.animes[0];
+    const expectedEpisodeNumber = isNaN(episodeIndex) ? 'movie' : Number(episodeIndex);
+    const episodeInfo = findCompatibleEpisode(
+        anime.episodes,
+        anime.animeId,
+        expectedEpisodeNumber
+    );
     if (!episodeInfo) return null;
-    animaInfo.animes[0].episodes = [episodeInfo];
-    return { animeName, animaInfo };
+    anime.episodes = [episodeInfo];
+    return { animeName, animaInfo, expectedEpisodeNumber };
 }
 
 /**
  * 智能匹配：从候选列表中选择最佳匹配
  * @param {string} searchTitle
  * @param {object[]} candidates
- * @param {string} prefix - API prefix for fetchSearchEpisodes
+ * @param {number|string|null} expectedEpisodeNumber
  * @returns {object|null}
  */
-export function selectBestMatch(searchTitle, candidates, prefix) {
+export function selectBestMatch(searchTitle, candidates, expectedEpisodeNumber) {
     if (!candidates?.length) return null;
 
     console.log(`[智能匹配] 搜索标题: "${searchTitle}", 候选数量: ${candidates.length}`);
@@ -89,22 +99,18 @@ export function selectBestMatch(searchTitle, candidates, prefix) {
             console.log(`[智能匹配] 季度匹配加分: ${candidate.animeTitle}`);
         }
 
-        if (parsedSearch.episode) {
-            let episodeMatched = false;
-            if (candidate.episodeId) {
-                const episodeFromId = parseInt(candidate.episodeId.toString().slice(-3), 10);
-                if (episodeFromId === parsedSearch.episode) {
-                    score.total += 0.25;
-                    episodeMatched = true;
-                    console.log(`[智能匹配] episodeId集数匹配加分: ${candidate.animeTitle} (${episodeFromId})`);
-                }
-            }
-            if (!episodeMatched && candidate.episodeTitle) {
-                const episodeMatch = candidate.episodeTitle.match(/第?(\d+)[话集]/);
-                if (episodeMatch && parseInt(episodeMatch[1], 10) === parsedSearch.episode) {
-                    score.total += 0.2;
-                    console.log(`[智能匹配] episodeTitle集数匹配加分: ${candidate.animeTitle} - ${candidate.episodeTitle}`);
-                }
+        const targetEpisodeNumber = expectedEpisodeNumber ?? parsedSearch.episode;
+        if (targetEpisodeNumber && targetEpisodeNumber !== 'movie') {
+            if (!isEpisodeCompatible(targetEpisodeNumber, candidate, candidate.animeId)) {
+                score.total = -1;
+                console.log(
+                    `[智能匹配] 忽略集数不符或无法确认的候选: ${candidate.animeTitle} - ${candidate.episodeTitle || ''}`
+                );
+            } else {
+                score.total += 0.25;
+                console.log(
+                    `[智能匹配] 集数严格匹配: ${candidate.animeTitle} (${getEpisodeNumber(candidate, candidate.animeId)})`
+                );
             }
         }
 

@@ -4,6 +4,7 @@
 
 import { dandanplayApi } from '../config/api.js';
 import { fetchSearchEpisodesByTmdbId } from './search.js';
+import { getEpisodeNumber } from './episode-number.js';
 
 /**
  * 排除特典集，只保留正片。
@@ -49,6 +50,7 @@ export async function tryMatchByTmdbId(itemInfoMap, apiConfigs, apiPriority) {
                 console.log(`[tmdbId匹配] 电影匹配成功: ${firstAnime.animeTitle}`);
                 return {
                     directMatch: true,
+                    expectedEpisodeNumber: 'movie',
                     apiPrefix: config.prefix,
                     apiName: config.name,
                     episodeInfo: {
@@ -104,9 +106,15 @@ export async function tryMatchByTmdbId(itemInfoMap, apiConfigs, apiPriority) {
         }
 
         if (matchedEp && matchedAnime) {
+            const matchedEpisodeNumber = getEpisodeNumber(matchedEp, matchedAnime.animeId);
+            if (!matchedEpisodeNumber) {
+                console.warn('[tmdbId匹配] 无法确认返回集号，放弃该结果');
+                continue;
+            }
             console.log(`[tmdbId匹配] 季度剧集匹配成功: ${matchedAnime.animeTitle} - ${matchedEp.episodeTitle}`);
             return {
                 directMatch: true,
+                expectedEpisodeNumber: matchedEpisodeNumber,
                 apiPrefix: config.prefix,
                 apiName: config.name,
                 episodeInfo: {

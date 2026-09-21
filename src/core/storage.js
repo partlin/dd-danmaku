@@ -7,7 +7,7 @@ import { lsGetItem, lsGetKeyById, lsKeys } from '../config/api.js';
 import { objectEntries } from '../utils/helpers.js';
 import { lsLocalKeys } from '../config/ls-local-keys.js';
 
-export const MATCH_CACHE_EPOCH = '4';
+export const MATCH_CACHE_EPOCH = '5';
 
 export function lsSetItem(id, value) {
     if (!lsGetKeyById(id)) {
