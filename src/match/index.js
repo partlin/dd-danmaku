@@ -22,3 +22,12 @@ export { filterMainEpisodes, tryMatchByTmdbId } from './tmdb.js';
 export { parseAnimeName, lsSeasonSearchEpisodes, searchEpisodes, writeLsSeasonInfo } from './episode.js';
 export { getEpisodeInfo } from './get-episode-info.js';
 export { getMapByEmbyItemInfo } from './emby-item.js';
+export {
+    isSpecialAnimeType,
+    getSeasonMatchScore,
+    isSeasonCompatible,
+    prioritizeSeasonCandidates,
+    getSeasonEpisodeOffset,
+    selectSeasonInfo,
+    createSeasonInfo,
+} from './season.js';

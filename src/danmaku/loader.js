@@ -14,7 +14,6 @@ import { getById, getByClass, waitForElement } from '../utils/dom.js';
 import { danmakuParser } from './parser.js';
 import { danmakuFilter } from './filter.js';
 import { buildProgressBarChart } from './chart.js';
-import { getMapByEmbyItemInfo } from '../match/emby-item.js';
 import { getEpisodeInfo } from '../match/get-episode-info.js';
 import { fetchComment, fetchExtcommentActual } from '../match/search.js';
 
@@ -168,40 +167,47 @@ async function addExtCommentsForLoad(extUrl, extComments, hooks = {}) {
  * @param {string} loadType - LOAD_TYPE
  * @param {object} [hooks] - { buildCurrentDanmakuInfo }
  */
-export function loadDanmaku(loadType = LOAD_TYPE.CHECK, hooks = {}) {
+export async function loadDanmaku(loadType = LOAD_TYPE.CHECK, hooks = {}) {
     const _media = document.querySelector(mediaQueryStr);
     if (!_media) {
-        return console.warn('用户已退出视频播放,停止加载弹幕');
+        console.warn('用户已退出视频播放,停止加载弹幕');
+        return false;
     }
+    if (loadType === LOAD_TYPE.RELOAD) window.ede.loading = false;
     if (window.ede?.loading) {
         console.log('正在重新加载');
-        return;
+        return false;
     }
     window.ede.loading = true;
 
     const buildCurrentDanmakuInfoFn = hooks.buildCurrentDanmakuInfo || (() => {});
     const appendvideoOsdDanmakuInfoFn = hooks.appendvideoOsdDanmakuInfo || (() => {});
+    const createHooks = {
+        buildCurrentDanmakuInfo: buildCurrentDanmakuInfoFn,
+        appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn,
+    };
 
-    if (lsGetItem(lsKeys.useFetchPluginXml.id)) {
-        getMapByEmbyItemInfo()
-            .then((itemInfoMap) =>
-                getCommentsByPluginApi(window.ede.itemId).then((comments) => {
-                    if (comments?.length > 0) {
-                        return createDanmaku(comments, {
-                            buildCurrentDanmakuInfo: buildCurrentDanmakuInfoFn,
-                            appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn,
-                        }).then(() => {
-                            window.ede.loading = false;
-                            const ctr = getById(eleIds.danmakuCtr);
-                            if (ctr) ctr.style.opacity = '1';
-                        });
-                    }
-                    throw new Error('useFetchPluginXml 失败');
-                })
-            )
-            .catch(() => loadOnlineDanmaku(loadType, hooks));
-    } else {
-        loadOnlineDanmaku(loadType, hooks);
+    try {
+        window.ede.onlineDanmakuOk = false;
+        const onlineLoaded = await loadOnlineDanmaku(loadType, hooks);
+        if (onlineLoaded || !lsGetItem(lsKeys.useFetchPluginXml.id)) return onlineLoaded;
+
+        const comments = await getCommentsByPluginApi(window.ede.itemId);
+        if (!comments?.length) return false;
+
+        await createDanmaku(comments, createHooks);
+        window.ede.onlineDanmakuOk = true;
+        console.log(`${lsKeys.useFetchPluginXml.name}:就位(在线失败回退服务端)`);
+        const ctr = getById(eleIds.danmakuCtr);
+        if (ctr) ctr.style.opacity = '1';
+        const title = getById(eleIds.videoOsdDanmakuTitle);
+        if (title) title.innerText = `弹幕：${lsKeys.useFetchPluginXml.name} - ${comments.length}条`;
+        return true;
+    } catch (error) {
+        console.error('[加载]弹幕加载失败:', error);
+        return false;
+    } finally {
+        window.ede.loading = false;
     }
 }
 
@@ -214,69 +220,63 @@ export async function loadOnlineDanmaku(loadType, hooks = {}) {
     const buildCurrentDanmakuInfoFn = hooks.buildCurrentDanmakuInfo || (() => {});
     const appendvideoOsdDanmakuInfoFn = hooks.appendvideoOsdDanmakuInfo || (() => {});
 
-    getEpisodeInfo(loadType !== LOAD_TYPE.SEARCH, appendvideoOsdDanmakuInfoFn)
-        .then((info) => {
-            return new Promise((resolve, reject) => {
-                if (!info) {
-                    reject(loadType !== LOAD_TYPE.INIT ? '播放器未完成加载' : null);
-                    return;
-                }
-                if (
-                    loadType !== LOAD_TYPE.SEARCH &&
-                    loadType !== LOAD_TYPE.REFRESH &&
-                    loadType !== LOAD_TYPE.RELOAD &&
-                    loadType !== LOAD_TYPE.INIT &&
-                    window.ede?.danmaku &&
-                    window.ede?.episode_info?.episodeId == info.episodeId
-                ) {
-                    reject('当前播放视频未变动');
-                    return;
-                }
-                window.ede.episode_info = info;
-                resolve(info.episodeId);
-            });
-        })
-        .then(
-            (episodeId) => {
-                if (episodeId) {
-                    if (loadType === LOAD_TYPE.RELOAD && window.ede?.danmuCache?.[episodeId]) {
-                        createDanmaku(window.ede.danmuCache[episodeId], {
-                            buildCurrentDanmakuInfo: buildCurrentDanmakuInfoFn,
-                            appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn,
-                        }).catch(console.log);
-                    } else {
-                        fetchComment(episodeId).then((comments) => {
-                            window.ede.danmuCache = window.ede.danmuCache || {};
-                            window.ede.danmuCache[episodeId] = comments;
-                            createDanmaku(comments, {
-                                buildCurrentDanmakuInfo: buildCurrentDanmakuInfoFn,
-                                appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn,
-                            }).catch(console.log);
-                        });
-                    }
-                }
-            },
-            (msg) => {
-                if (msg) console.log(msg);
-            }
-        )
-        .then(() => {
-            const extCommentCache = window.ede?.extCommentCache?.[window.ede.itemId] || {};
-            const hooks = {
-                buildCurrentDanmakuInfo: buildCurrentDanmakuInfoFn,
-                appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn,
-            };
-            objectEntries(extCommentCache).forEach(([key, val]) =>
-                addExtCommentsForLoad(key, val, hooks)
+    const createHooks = {
+        buildCurrentDanmakuInfo: buildCurrentDanmakuInfoFn,
+        appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn,
+    };
+
+    try {
+        const info = await getEpisodeInfo(
+            loadType !== LOAD_TYPE.SEARCH,
+            appendvideoOsdDanmakuInfoFn
+        );
+        if (!info) {
+            if (loadType !== LOAD_TYPE.INIT) console.log('播放器未完成加载');
+            return false;
+        }
+        if (
+            ![LOAD_TYPE.SEARCH, LOAD_TYPE.REFRESH, LOAD_TYPE.RELOAD, LOAD_TYPE.INIT].includes(loadType) &&
+            window.ede?.danmaku &&
+            window.ede?.episode_info?.episodeId == info.episodeId
+        ) {
+            console.log('当前播放视频未变动');
+            window.ede.onlineDanmakuOk = true;
+            return true;
+        }
+
+        if (window.ede.episode_info) {
+            window.ede.previous_episode_info = { ...window.ede.episode_info };
+        }
+        window.ede.episode_info = info;
+        const episodeId = info.episodeId;
+        let comments =
+            loadType === LOAD_TYPE.RELOAD ? window.ede?.danmuCache?.[episodeId] : null;
+        if (!comments) {
+            comments = await fetchComment(episodeId);
+            window.ede.danmuCache = window.ede.danmuCache || {};
+            window.ede.danmuCache[episodeId] = comments;
+        }
+        if (!comments?.length) return false;
+
+        await createDanmaku(comments, createHooks);
+        window.ede.onlineDanmakuOk = true;
+
+        const extCommentCache = window.ede?.extCommentCache?.[window.ede.itemId] || {};
+        try {
+            await Promise.all(
+                objectEntries(extCommentCache).map(([key, val]) =>
+                    addExtCommentsForLoad(key, val, createHooks)
+                )
             );
-            if (window.ede?.episode_info) {
-                window.ede.previous_episode_info = { ...window.ede.episode_info };
-            }
-            window.ede.loading = false;
-            const ctr = getById(eleIds.danmakuCtr);
-            if (ctr) ctr.style.opacity = '1';
-        })
-        .catch(() => {
-            window.ede.loading = false;
-        });
+        } catch (error) {
+            console.warn('[在线弹幕]附加弹幕加载失败，不影响主弹幕:', error);
+        }
+        const ctr = getById(eleIds.danmakuCtr);
+        if (ctr) ctr.style.opacity = '1';
+        return true;
+    } catch (error) {
+        console.error('[在线弹幕]加载失败:', error);
+        window.ede.onlineDanmakuOk = false;
+        return false;
+    }
 }

@@ -17,10 +17,12 @@ import { corsProxy } from '../../user-config.js';
 import { appendvideoOsdDanmakuInfo } from '../../events/video-osd.js';
 import { buildCurrentDanmakuInfo } from './info.js';
 import { LOAD_TYPE } from '../../config/constants.js';
-import { fetchSearchEpisodes, fetchExtcommentActual } from '../../match/search.js';
+import { fetchSearchEpisodes, fetchExtcommentActual, fetchComment } from '../../match/search.js';
 import { parseAnimeName, writeLsSeasonInfo } from '../../match/episode.js';
 import { createDanmaku, loadDanmaku } from '../../danmaku/loader.js';
 import { embyToast, closeEmbyDialog } from '../dialog.js';
+import { calculateStringSimilarity } from '../../match/similarity.js';
+import { createSeasonInfo, prioritizeSeasonCandidates } from '../../match/season.js';
 
 const createDanmakuHooks = {
     buildCurrentDanmakuInfo,
@@ -98,6 +100,7 @@ async function doDanmakuSearchEpisode() {
         return;
     }
     if (danmakuRemarkEle) danmakuRemarkEle.innerText = '';
+    allAnimes = prioritizeSeasonCandidates(searchName, allAnimes);
 
     const danmakuAnimeDiv = getById(eleIds.danmakuAnimeDiv);
     const danmakuEpisodeNumDiv = getById(eleIds.danmakuEpisodeNumDiv);
@@ -219,6 +222,7 @@ function doDanmakuSwitchEpisode() {
         episodeIndex: episodeNumSelect.selectedIndex,
         animeId: anime.animeId,
         animeTitle: anime.animeTitle,
+        animeType: anime.type,
         animeOriginalTitle: '',
         imageUrl: anime.imageUrl,
         seriesOrMovieId: seriesOrMovieId,
@@ -226,11 +230,38 @@ function doDanmakuSwitchEpisode() {
         apiName: anime.apiName,
     };
 
-    const seasonInfo = {
-        name: anime.animeTitle,
-        episodeOffset: episodeNumSelect.selectedIndex - window.ede.searchDanmakuOpts.episode,
-    };
-    writeLsSeasonInfo(_season_key, seasonInfo);
+    const episodeOptionText = episodeNumSelect.options[episodeNumSelect.selectedIndex].text;
+    const selectedEpisodeTitle = anime.episodes?.[episodeNumSelect.selectedIndex]?.episodeTitle || '';
+    const episodeNumberMatch =
+        selectedEpisodeTitle.match(/第\s*(\d+)\s*[话話集]/) ||
+        selectedEpisodeTitle.match(/^\s*(?:E(?:P(?:ISODE)?)?\s*)?(\d+)(?:\s*[-－:：.]|\b)/i);
+    const dandanEpisodeNumber = episodeNumberMatch ? parseInt(episodeNumberMatch[1], 10) : NaN;
+    let seasonInfo = null;
+    if (Number.isFinite(dandanEpisodeNumber)) {
+        seasonInfo = createSeasonInfo(
+            anime,
+            dandanEpisodeNumber - 1,
+            Number(window.ede.searchDanmakuOpts.episode) + 1
+        );
+        try {
+            const oldList = JSON.parse(localStorage.getItem(_season_key) || '[]');
+            const pruned = oldList.filter((item) => {
+                const sameAnime = String(item.animeId) === String(seasonInfo.animeId);
+                const similarName =
+                    calculateStringSimilarity(item.name || '', seasonInfo.name || '') >= 0.5;
+                return !(sameAnime || similarName);
+            });
+            if (pruned.length !== oldList.length) {
+                localStorage.setItem(_season_key, JSON.stringify(pruned));
+                console.log(`[手动匹配] 已清理 ${oldList.length - pruned.length} 条旧季偏移缓存`);
+            }
+        } catch (error) {
+            console.warn('[手动匹配] 清理旧季缓存失败:', error);
+        }
+        writeLsSeasonInfo(_season_key, seasonInfo);
+    } else {
+        console.warn('[手动匹配] 无法解析真实集号，跳过季偏移缓存写入:', episodeOptionText);
+    }
 
     const useOfficialApi = lsGetItem(lsKeys.useOfficialApi.id);
     const useCustomApi = lsGetItem(lsKeys.useCustomApi.id);
@@ -243,6 +274,14 @@ function doDanmakuSwitchEpisode() {
     const unique_episode_key = lsLocalKeys.apiPrefix + `${enabledApis.join('_')}_` + _episode_key;
     localStorage.setItem(unique_episode_key, JSON.stringify(episodeInfo));
 
+    try {
+        const manualPayload = JSON.stringify({ ...episodeInfo, manual: true, savedAt: Date.now() });
+        if (_episode_key) localStorage.setItem(`_ede_manual_match_${_episode_key}`, manualPayload);
+        if (window.ede.itemId) localStorage.setItem(`_ede_manual_match_${window.ede.itemId}`, manualPayload);
+    } catch (error) {
+        console.warn('[手动匹配] 持久化失败:', error);
+    }
+
     if (window.ede.episode_info) {
         Object.assign(window.ede.episode_info, episodeInfo);
     } else {
@@ -250,8 +289,27 @@ function doDanmakuSwitchEpisode() {
     }
     window.ede.previous_episode_info = { ...window.ede.episode_info };
 
-    console.log('手动匹配成功，已加载新弹幕信息:', episodeInfo);
-    loadDanmaku(LOAD_TYPE.RELOAD);
+    console.log('手动匹配成功，直接加载所选弹幕:', episodeInfo);
+    window.ede.loading = false;
+    window.ede.onlineDanmakuOk = true;
+    fetchComment(episodeInfo.episodeId)
+        .then((comments) => {
+            if (!comments?.length) throw new Error('所选剧集没有可用弹幕');
+            window.ede.danmuCache[episodeInfo.episodeId] = comments;
+            return createDanmaku(comments, createDanmakuHooks);
+        })
+        .then(() => {
+            const ctr = getById(eleIds.danmakuCtr);
+            if (ctr) ctr.style.opacity = '1';
+            appendvideoOsdDanmakuInfo(window.ede.commentsParsed.length);
+        })
+        .catch((error) => {
+            console.error('手动匹配弹幕加载失败:', error);
+            embyToast({ text: `手动匹配弹幕加载失败: ${error.message || error}` });
+        })
+        .finally(() => {
+            window.ede.loading = false;
+        });
     closeEmbyDialog();
 }
 
@@ -268,6 +326,10 @@ function bindManualMatchButtons() {
             lsLocalKeys.apiPrefix,
         ];
         lsBatchRemove(prefixesToClear);
+
+        const scopedEpisodeKey = window.ede.searchDanmakuOpts?._episode_key;
+        if (scopedEpisodeKey) localStorage.removeItem(`_ede_manual_match_${scopedEpisodeKey}`);
+        if (window.ede.itemId) localStorage.removeItem(`_ede_manual_match_${window.ede.itemId}`);
 
         if (window.ede.episode_info) {
             window.ede.episode_info.episodeId = null;

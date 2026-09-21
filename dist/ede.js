@@ -3,7 +3,15 @@
 var skipInnerModule=false;
 try{throw new Error()}catch(e){skipInnerModule=!!(e.stack&&e.stack.includes('CustomCssJS'));}
 if(!skipInnerModule){
+/*
+ * Emby 会在全局暴露 AMD define。若不处理，上游 UMD 包装器会把自身注册为
+ * 匿名 AMD 模块，污染 Emby 的下一次 require() 调用，而不是设置 window.Danmaku。
+ * 此处屏蔽 CommonJS/AMD 全局变量，确保直接脚本、用户脚本和 Android 构建
+ * 始终走浏览器全局变量分支。
+ */
+(function(define,module,exports){
 !function(t,e){"object"==typeof exports&&"undefined"!=typeof module?module.exports=e():"function"==typeof define&&define.amd?define(e):(t="undefined"!=typeof globalThis?globalThis:t||self).Danmaku=e()}(this,(function(){"use strict";var t=function(){if("undefined"==typeof document)return"transform";for(var t=["oTransform","msTransform","mozTransform","webkitTransform","transform"],e=document.createElement("div").style,i=0;i<t.length;i++)if(t[i]in e)return t[i];return"transform"}();function e(t){var e=document.createElement("div");if(e.style.cssText="position:absolute;","function"==typeof t.render){var i=t.render();if(i instanceof HTMLElement)return e.appendChild(i),e}if(e.textContent=t.text,t.style)for(var n in t.style)e.style[n]=t.style[n];return e}var i={name:"dom",init:function(){var t=document.createElement("div");return t.style.cssText="overflow:hidden;white-space:nowrap;transform:translateZ(0);",t},clear:function(t){for(var e=t.lastChild;e;)t.removeChild(e),e=t.lastChild},resize:function(t,e,i){t.style.width=e+"px",t.style.height=i+"px"},framing:function(){},setup:function(t,i){var n=document.createDocumentFragment(),s=0,r=null;for(s=0;s<i.length;s++)(r=i[s]).node=r.node||e(r),n.appendChild(r.node);for(i.length&&t.appendChild(n),s=0;s<i.length;s++)(r=i[s]).width=r.width||r.node.offsetWidth,r.height=r.height||r.node.offsetHeight},render:function(e,i){i.node.style[t]="translate("+i.x+"px,"+i.y+"px)"},remove:function(t,e){t.removeChild(e.node),this.media||(e.node=null)}},n="undefined"!=typeof window&&window.devicePixelRatio||1,s=Object.create(null);function r(t,e){if("function"==typeof t.render){var i=t.render();if(i instanceof HTMLCanvasElement)return t.width=i.width,t.height=i.height,i}var r=document.createElement("canvas"),h=r.getContext("2d"),o=t.style||{};o.font=o.font||"10px sans-serif",o.textBaseline=o.textBaseline||"bottom";var a=1*o.lineWidth;for(var d in a=a>0&&a!==1/0?Math.ceil(a):1*!!o.strokeStyle,h.font=o.font,t.width=t.width||Math.max(1,Math.ceil(h.measureText(t.text).width)+2*a),t.height=t.height||Math.ceil(function(t,e){if(s[t])return s[t];var i=12,n=t.match(/(\d+(?:\.\d+)?)(px|%|em|rem)(?:\s*\/\s*(\d+(?:\.\d+)?)(px|%|em|rem)?)?/);if(n){var r=1*n[1]||10,h=n[2],o=1*n[3]||1.2,a=n[4];"%"===h&&(r*=e.container/100),"em"===h&&(r*=e.container),"rem"===h&&(r*=e.root),"px"===a&&(i=o),"%"===a&&(i=r*o/100),"em"===a&&(i=r*o),"rem"===a&&(i=e.root*o),void 0===a&&(i=r*o)}return s[t]=i,i}(o.font,e))+2*a,r.width=t.width*n,r.height=t.height*n,h.scale(n,n),o)h[d]=o[d];var u=0;switch(o.textBaseline){case"top":case"hanging":u=a;break;case"middle":u=t.height>>1;break;default:u=t.height-a}return o.strokeStyle&&h.strokeText(t.text,a,u),h.fillText(t.text,a,u),r}function h(t){return 1*window.getComputedStyle(t,null).getPropertyValue("font-size").match(/(.+)px/)[1]}var o={name:"canvas",init:function(t){var e=document.createElement("canvas");return e.context=e.getContext("2d"),e._fontSize={root:h(document.getElementsByTagName("html")[0]),container:h(t)},e},clear:function(t,e){t.context.clearRect(0,0,t.width,t.height);for(var i=0;i<e.length;i++)e[i].canvas=null},resize:function(t,e,i){t.width=e*n,t.height=i*n,t.style.width=e+"px",t.style.height=i+"px"},framing:function(t){t.context.clearRect(0,0,t.width,t.height)},setup:function(t,e){for(var i=0;i<e.length;i++){var n=e[i];n.canvas=r(n,t._fontSize)}},render:function(t,e){t.context.drawImage(e.canvas,e.x*n,e.y*n)},remove:function(t,e){e.canvas=null}},a=("undefined"!=typeof window&&(window.requestAnimationFrame||window.mozRequestAnimationFrame||window.webkitRequestAnimationFrame)||function(t){return setTimeout(t,50/3)}).bind(window),d=("undefined"!=typeof window&&(window.cancelAnimationFrame||window.mozCancelAnimationFrame||window.webkitCancelAnimationFrame)||clearTimeout).bind(window);function u(t,e,i){for(var n=0,s=0,r=t.length;s<r-1;)i>=t[n=s+r>>1][e]?s=n:r=n;return t[s]&&i<t[s][e]?s:r}function m(t){return/^(ltr|top|bottom)$/i.test(t)?t.toLowerCase():"rtl"}function c(){var t=9007199254740991;return[{range:0,time:-t,width:t,height:0},{range:t,time:t,width:0,height:0}]}function l(t){t.ltr=c(),t.rtl=c(),t.top=c(),t.bottom=c()}function f(){return void 0!==window.performance&&window.performance.now?window.performance.now():Date.now()}function p(t){var e=this,i=this.media?this.media.currentTime:f()/1e3,n=this.media?this.media.playbackRate:1;function s(t,s){if("top"===s.mode||"bottom"===s.mode)return i-t.time<e._.duration;var r=(e._.width+t.width)*(i-t.time)*n/e._.duration;if(t.width>r)return!0;var h=e._.duration+t.time-i,o=e._.width+s.width,a=e.media?s.time:s._utc,d=o*(i-a)*n/e._.duration,u=e._.width-d;return h>e._.duration*u/(e._.width+s.width)}for(var r=this._.space[t.mode],h=0,o=0,a=1;a<r.length;a++){var d=r[a],u=t.height;if("top"!==t.mode&&"bottom"!==t.mode||(u+=d.height),d.range-d.height-r[h].range>=u){o=a;break}s(d,t)&&(h=a)}var m=r[h].range,c={range:m+t.height,time:this.media?t.time:t._utc,width:t.width,height:t.height};return r.splice(h+1,o-h-1,c),"bottom"===t.mode?this._.height-t.height-m%this._.height:m%(this._.height-t.height)}function g(){if(!this._.visible||!this._.paused)return this;if(this._.paused=!1,this.media)for(var t=0;t<this._.runningList.length;t++){var e=this._.runningList[t];e._utc=f()/1e3-(this.media.currentTime-e.time)}var i=this,n=function(t,e,i,n){return function(s){t(this._.stage);var r=(s||f())/1e3,h=this.media?this.media.currentTime:r,o=this.media?this.media.playbackRate:1,a=null,d=0,u=0;for(u=this._.runningList.length-1;u>=0;u--)a=this._.runningList[u],h-(d=this.media?a.time:a._utc)>this._.duration&&(n(this._.stage,a),this._.runningList.splice(u,1));for(var m=[];this._.position<this.comments.length&&(a=this.comments[this._.position],!((d=this.media?a.time:a._utc)>=h));)h-d>this._.duration||(this.media&&(a._utc=r-(this.media.currentTime-a.time)),m.push(a)),++this._.position;for(e(this._.stage,m),u=0;u<m.length;u++)(a=m[u]).y=p.call(this,a),this._.runningList.push(a);for(u=0;u<this._.runningList.length;u++){a=this._.runningList[u];var c=(this._.width+a.width)*(r-a._utc)*o/this._.duration;"ltr"===a.mode&&(a.x=c-a.width),"rtl"===a.mode&&(a.x=this._.width-c),"top"!==a.mode&&"bottom"!==a.mode||(a.x=this._.width-a.width>>1),i(this._.stage,a)}}}(this._.engine.framing.bind(this),this._.engine.setup.bind(this),this._.engine.render.bind(this),this._.engine.remove.bind(this));return this._.requestID=a((function t(e){n.call(i,e),i._.requestID=a(t)})),this}function _(){return!this._.visible||this._.paused||(this._.paused=!0,d(this._.requestID),this._.requestID=0),this}function v(){if(!this.media)return this;this.clear(),l(this._.space);var t=u(this.comments,"time",this.media.currentTime);return this._.position=Math.max(0,t-1),this}function w(t){t.play=g.bind(this),t.pause=_.bind(this),t.seeking=v.bind(this),this.media.addEventListener("play",t.play),this.media.addEventListener("pause",t.pause),this.media.addEventListener("playing",t.play),this.media.addEventListener("waiting",t.pause),this.media.addEventListener("seeking",t.seeking)}function y(t){this.media.removeEventListener("play",t.play),this.media.removeEventListener("pause",t.pause),this.media.removeEventListener("playing",t.play),this.media.removeEventListener("waiting",t.pause),this.media.removeEventListener("seeking",t.seeking),t.play=null,t.pause=null,t.seeking=null}function x(t){this._={},this.container=t.container||document.createElement("div"),this.media=t.media,this._.visible=!0,this.engine=(t.engine||"DOM").toLowerCase(),this._.engine="canvas"===this.engine?o:i,this._.requestID=0,this._.speed=Math.max(0,t.speed)||144,this._.duration=4,this.comments=t.comments||[],this.comments.sort((function(t,e){return t.time-e.time}));for(var e=0;e<this.comments.length;e++)this.comments[e].mode=m(this.comments[e].mode);return this._.runningList=[],this._.position=0,this._.paused=!0,this.media&&(this._.listener={},w.call(this,this._.listener)),this._.stage=this._.engine.init(this.container),this._.stage.style.cssText+="position:relative;pointer-events:none;",this.resize(),this.container.appendChild(this._.stage),this._.space={},l(this._.space),this.media&&this.media.paused||(v.call(this),g.call(this)),this}function b(){if(!this.container)return this;for(var t in _.call(this),this.clear(),this.container.removeChild(this._.stage),this.media&&y.call(this,this._.listener),this)Object.prototype.hasOwnProperty.call(this,t)&&(this[t]=null);return this}var L=["mode","time","text","render","style"];function T(t){if(!t||"[object Object]"!==Object.prototype.toString.call(t))return this;for(var e={},i=0;i<L.length;i++)void 0!==t[L[i]]&&(e[L[i]]=t[L[i]]);if(e.text=(e.text||"").toString(),e.mode=m(e.mode),e._utc=f()/1e3,this.media){var n=0;void 0===e.time?(e.time=this.media.currentTime,n=this._.position):(n=u(this.comments,"time",e.time))<this._.position&&(this._.position+=1),this.comments.splice(n,0,e)}else this.comments.push(e);return this}function E(){return this._.visible?this:(this._.visible=!0,this.media&&this.media.paused||(v.call(this),g.call(this)),this)}function k(){return this._.visible?(_.call(this),this.clear(),this._.visible=!1,this):this}function C(){return this._.engine.clear(this._.stage,this._.runningList),this._.runningList=[],this}function z(){return this._.width=this.container.offsetWidth,this._.height=this.container.offsetHeight,this._.engine.resize(this._.stage,this._.width,this._.height),this._.duration=this._.width/this._.speed,this}var D={get:function(){return this._.speed},set:function(t){return"number"!=typeof t||isNaN(t)||!isFinite(t)||t<=0?this._.speed:(this._.speed=t,this._.width&&(this._.duration=this._.width/t),t)}};function M(t){t&&x.call(this,t)}return M.prototype.destroy=function(){return b.call(this)},M.prototype.emit=function(t){return T.call(this,t)},M.prototype.show=function(){return E.call(this)},M.prototype.hide=function(){return k.call(this)},M.prototype.clear=function(){return C.call(this)},M.prototype.resize=function(){return z.call(this)},Object.defineProperty(M.prototype,"speed",D),M}));
+})(undefined,undefined,undefined);
 }else if(typeof Emby!=='undefined'&&Emby.importModule){
 var p=localStorage.getItem('danmakuCustomeDanmakuUrl')||'https://danmaku.7o7o.cc/danmaku.min.js';
 Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){console.error('Danmaku load error:',e);});
@@ -1163,6 +1171,23 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     return item;
   }
 
+  /**
+   * localStorage 前缀键配置
+   * 从 ede.js 迁移，未修改原有实现逻辑
+   */
+
+  var lsLocalKeys = {
+    animePrefix: '_anime_id_rel_',
+    animeSeasonPrefix: '_anime_season_rel_',
+    animeEpisodePrefix: '_episode_id_rel_',
+    bangumiEpInfoPrefix: '_bangumi_episode_id_rel_',
+    bangumiMe: '_bangumi_me',
+    apiPrefix: '_api_',
+    manualMatchPrefix: '_ede_manual_match_',
+    matchEpoch: '_ede_match_epoch'
+  };
+
+  var MATCH_CACHE_EPOCH = '4';
   function lsSetItem(id, value) {
     if (!lsGetKeyById(id)) {
       return;
@@ -1227,6 +1252,33 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     }).length > 0;
   }
 
+  /**
+   * 一次性清理旧版自动匹配缓存，保留用户设置与手动匹配记录。
+   */
+  function migrateMatchCacheEpoch() {
+    try {
+      if (localStorage.getItem(lsLocalKeys.matchEpoch) === MATCH_CACHE_EPOCH) return;
+      var prefixes = [lsLocalKeys.animeEpisodePrefix, lsLocalKeys.animeSeasonPrefix, lsLocalKeys.animePrefix, lsLocalKeys.apiPrefix];
+      var doomed = [];
+      var _loop = function _loop() {
+        var key = localStorage.key(index);
+        if (key && prefixes.some(function (prefix) {
+          return key.startsWith(prefix);
+        })) doomed.push(key);
+      };
+      for (var index = 0; index < localStorage.length; index++) {
+        _loop();
+      }
+      doomed.forEach(function (key) {
+        return localStorage.removeItem(key);
+      });
+      localStorage.setItem(lsLocalKeys.matchEpoch, MATCH_CACHE_EPOCH);
+      console.log("[\u7F13\u5B58\u7EAA\u5143] \u5DF2\u5347\u7EA7\u5230 v".concat(MATCH_CACHE_EPOCH, "\uFF0C\u6E05\u9664 ").concat(doomed.length, " \u6761\u65E7\u81EA\u52A8\u5339\u914D\u7F13\u5B58"));
+    } catch (error) {
+      console.warn('[缓存纪元] 迁移失败:', error);
+    }
+  }
+
   var EDE = /*#__PURE__*/_createClass(function EDE() {
     _classCallCheck(this, EDE);
     this.chConvert = lsGetItem(lsKeys.chConvert.id);
@@ -1234,6 +1286,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     this.episode_info = null;
     this.ob = null;
     this.loading = false;
+    this.onlineDanmakuOk = false;
     this.danmuCache = {}; // 只包含 comment 未解析
     this.commentsParsed = []; // 包含 comment 和 extComment 解析后全量
     this.extCommentCache = {}; // 只包含 extComment 未解析
@@ -2619,20 +2672,6 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     ctx.stroke();
   }
 
-  /**
-   * localStorage 前缀键配置
-   * 从 ede.js 迁移，未修改原有实现逻辑
-   */
-
-  var lsLocalKeys = {
-    animePrefix: '_anime_id_rel_',
-    animeSeasonPrefix: '_anime_season_rel_',
-    animeEpisodePrefix: '_episode_id_rel_',
-    bangumiEpInfoPrefix: '_bangumi_episode_id_rel_',
-    bangumiMe: '_bangumi_me',
-    apiPrefix: '_api_'
-  };
-
   async function getEmbyItemInfo() {
     if (typeof require === 'function') {
       return require(['playbackManager']).then(function (items) {
@@ -2696,13 +2735,12 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       } else {
         episodeName = seriesName + (seasonNumber && seasonNumber !== 1 ? " ".concat(seasonNumber) : '');
       }
-      animeName = seriesName;
-      if (seasonNumber != 1) {
-        animeName += ' ' + seasonNumber;
-      }
+      // 统一使用带 SxxExx 的标题作为匹配上下文，确保季度硬约束可识别。
+      animeName = episodeName;
     } else {
       _id = item.Id;
       animeName = item.Name;
+      episodeName = item.Name;
       episode = 'movie';
     }
     var _id_key = lsLocalKeys.animePrefix + _id;
@@ -2936,9 +2974,19 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     return extComments;
   }
 
-  /** 排除特典集（Sn/Cn 开头），返回正片数组 */
-  function filterMainEpisodes(episodes) {
+  /**
+   * 排除特典集，只保留正片。
+   * 若传入 animeId：按 episodeId 与 animeId 的关系（offset 1–8999 为正片，9xxx 为特典）过滤。
+   * 若未传入 animeId：按原方案用标题排除（Sn/Cn 开头视为特典）。
+   */
+  function filterMainEpisodes(episodes, animeId) {
     if (!episodes || !Array.isArray(episodes)) return [];
+    if (animeId != null && typeof animeId === 'number') {
+      return episodes.filter(function (ep) {
+        var offset = ep.episodeId - animeId * 10000;
+        return offset >= 1 && offset < 9000;
+      });
+    }
     return episodes.filter(function (ep) {
       return !/^[SC]\d+\s/.test(ep.episodeTitle || '');
     });
@@ -2971,7 +3019,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         if (episode === 'movie') {
           var _firstAnime$episodes;
           var firstAnime = animes[0];
-          var mainEps = filterMainEpisodes(firstAnime.episodes);
+          var mainEps = filterMainEpisodes(firstAnime.episodes, firstAnime.animeId);
           var ep = mainEps[0] || ((_firstAnime$episodes = firstAnime.episodes) === null || _firstAnime$episodes === void 0 ? void 0 : _firstAnime$episodes[0]);
           if (ep) {
             console.log("[tmdbId\u5339\u914D] \u7535\u5F71\u5339\u914D\u6210\u529F: ".concat(firstAnime.animeTitle));
@@ -2984,6 +3032,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
                 episodeTitle: ep.episodeTitle,
                 animeId: firstAnime.animeId,
                 animeTitle: firstAnime.animeTitle,
+                animeType: firstAnime.type,
                 imageUrl: dandanplayApi.posterImg(firstAnime.animeId)
               }
             };
@@ -3003,7 +3052,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         var matchedAnime = null;
         if (season === 0) {
           var ovaPairs = ovaAnimes.flatMap(function (a) {
-            return filterMainEpisodes(a.episodes).map(function (ep) {
+            return filterMainEpisodes(a.episodes, a.animeId).map(function (ep) {
               return {
                 anime: a,
                 ep: ep
@@ -3018,14 +3067,14 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         } else if (season >= 2) {
           var targetAnime = seasonAnimes[season - 1];
           if (targetAnime) {
-            var _mainEps = filterMainEpisodes(targetAnime.episodes);
+            var _mainEps = filterMainEpisodes(targetAnime.episodes, targetAnime.animeId);
             matchedEp = _mainEps[epNum - 1];
             matchedAnime = targetAnime;
           }
         } else {
           var acc = 0;
           for (var i = 0; i < seasonAnimes.length; i++) {
-            var _mainEps2 = filterMainEpisodes(seasonAnimes[i].episodes);
+            var _mainEps2 = filterMainEpisodes(seasonAnimes[i].episodes, seasonAnimes[i].animeId);
             var count = _mainEps2.length;
             if (epNum <= acc + count) {
               matchedEp = _mainEps2[epNum - acc - 1];
@@ -3046,6 +3095,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
               episodeTitle: matchedEp.episodeTitle,
               animeId: matchedAnime.animeId,
               animeTitle: matchedAnime.animeTitle,
+              animeType: matchedAnime.type,
               imageUrl: dandanplayApi.posterImg(matchedAnime.animeId)
             }
           };
@@ -3057,6 +3107,92 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       _iterator.f();
     }
     return null;
+  }
+
+  /**
+   * 季度匹配与季度缓存辅助函数
+   */
+  function isSpecialAnimeType(candidateType) {
+    var normalizedType = String(candidateType || '').toLowerCase();
+    return normalizedType === 'ova' || normalizedType === 'tvspecial';
+  }
+
+  /**
+   * 返回季度兼容分数；负数表示明确冲突。
+   */
+  function getSeasonMatchScore(searchTitle, candidateTitle, candidateType) {
+    var parsedSearch = parseSearchKeyword(String(searchTitle || ''));
+    if (parsedSearch.season === null) return 0;
+    var parsedCandidate = parseSearchKeyword(String(candidateTitle || ''));
+    if (parsedCandidate.season !== null) {
+      return parsedCandidate.season === parsedSearch.season ? 2 : -2;
+    }
+    if (parsedSearch.season === 0) {
+      if (!candidateType) {
+        return normalizeTitle(parsedCandidate.title) === normalizeTitle(parsedSearch.title) ? -1 : 1;
+      }
+      return isSpecialAnimeType(candidateType) ? 3 : -2;
+    }
+
+    // 未标注季度且与基础标题完全相同的条目通常为第一季。
+    if (parsedSearch.season > 1 && normalizeTitle(parsedCandidate.title) === normalizeTitle(parsedSearch.title)) {
+      return -1;
+    }
+    return 1;
+  }
+  function isSeasonCompatible(searchTitle, candidateTitle, candidateType) {
+    return getSeasonMatchScore(searchTitle, candidateTitle, candidateType) >= 0;
+  }
+  function prioritizeSeasonCandidates(searchTitle, candidates) {
+    if (!Array.isArray(candidates) || candidates.length < 2) return candidates;
+    var parsedSearch = parseSearchKeyword(String(searchTitle || ''));
+    if (parsedSearch.season === null) return candidates;
+    return candidates.map(function (candidate, index) {
+      return {
+        candidate: candidate,
+        index: index,
+        seasonScore: getSeasonMatchScore(searchTitle, candidate.animeTitle, candidate.type)
+      };
+    }).sort(function (a, b) {
+      return b.seasonScore - a.seasonScore || a.index - b.index;
+    }).map(function (_ref) {
+      var candidate = _ref.candidate;
+      return candidate;
+    });
+  }
+  function getSeasonEpisodeOffset(seasonInfo) {
+    var episodeOffset = Number(seasonInfo === null || seasonInfo === void 0 ? void 0 : seasonInfo.episodeOffset);
+    if (!Number.isFinite(episodeOffset)) return NaN;
+    // 旧缓存按 0-based 下标计算，所有偏移少了 1。
+    return seasonInfo.episodeOffsetVersion === 2 ? episodeOffset : episodeOffset + 1;
+  }
+  function selectSeasonInfo(searchTitle, seasonInfoList, episode) {
+    var _seasonInfoList$map$f;
+    if (!Array.isArray(seasonInfoList)) return null;
+    return ((_seasonInfoList$map$f = seasonInfoList.map(function (seasonInfo, index) {
+      return {
+        seasonInfo: seasonInfo,
+        index: index,
+        adjustedEpisode: Number(episode) + getSeasonEpisodeOffset(seasonInfo),
+        seasonScore: getSeasonMatchScore(searchTitle, seasonInfo.name, seasonInfo.animeType)
+      };
+    }).filter(function (item) {
+      return item.adjustedEpisode > 0 && item.seasonScore >= 0;
+    }).sort(function (a, b) {
+      return b.seasonScore - a.seasonScore || Number(b.seasonInfo.updatedAt || 0) - Number(a.seasonInfo.updatedAt || 0) || a.adjustedEpisode - b.adjustedEpisode || a.index - b.index;
+    })[0]) === null || _seasonInfoList$map$f === void 0 ? void 0 : _seasonInfoList$map$f.seasonInfo) || null;
+  }
+  function createSeasonInfo(anime, selectedEpisodeIndex, embyEpisode) {
+    return {
+      name: anime.animeTitle,
+      episodeOffset: Number(selectedEpisodeIndex) + 1 - Number(embyEpisode),
+      episodeOffsetVersion: 2,
+      animeId: anime.animeId,
+      animeType: anime.type,
+      apiPrefix: anime.apiPrefix,
+      apiName: anime.apiName,
+      updatedAt: Date.now()
+    };
   }
 
   /**
@@ -3133,12 +3269,13 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     console.log("[\u667A\u80FD\u5339\u914D] \u89E3\u6790\u641C\u7D22\u6807\u9898: ".concat(JSON.stringify(parsedSearch)));
     var scoredCandidates = candidates.map(function (candidate) {
       var score = calculateMatchScore(parsedSearch.title, candidate);
-      if (parsedSearch.season && candidate.animeTitle) {
-        var candidateParsed = parseSearchKeyword(candidate.animeTitle);
-        if (candidateParsed.season === parsedSearch.season) {
-          score.total += 0.15;
-          console.log("[\u667A\u80FD\u5339\u914D] \u5B63\u5EA6\u5339\u914D\u52A0\u5206: ".concat(candidate.animeTitle));
-        }
+      var seasonScore = getSeasonMatchScore(searchTitle, candidate.animeTitle, candidate.type);
+      if (seasonScore < 0) {
+        score.total = -1;
+        console.log("[\u667A\u80FD\u5339\u914D] \u5FFD\u7565\u5B63\u5EA6\u51B2\u7A81\u5019\u9009: ".concat(candidate.animeTitle));
+      } else if (seasonScore > 1) {
+        score.total += 0.15;
+        console.log("[\u667A\u80FD\u5339\u914D] \u5B63\u5EA6\u5339\u914D\u52A0\u5206: ".concat(candidate.animeTitle));
       }
       if (parsedSearch.episode) {
         var episodeMatched = false;
@@ -3337,8 +3474,15 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         console.log("[\u81EA\u52A8\u5339\u914D] \u5C1D\u8BD5 ".concat(config.name, " /match \u63A5\u53E3"));
         var matchResult = await fetchMatchApi(matchPayload, config.prefix);
         if (matchResult !== null && matchResult !== void 0 && matchResult.isMatched && ((_matchResult$animes = matchResult.animes) === null || _matchResult$animes === void 0 ? void 0 : _matchResult$animes.length) > 0) {
+          var candidates = prioritizeSeasonCandidates(animeName, matchResult.animes);
+          var match = candidates.find(function (candidate) {
+            return isSeasonCompatible(animeName, candidate.animeTitle, candidate.type);
+          });
+          if (!match) {
+            console.warn("".concat(config.name, " /match \u63A5\u53E3\u547D\u4E2D\u7ED3\u679C\u4E0E\u5F53\u524D\u5B63\u5EA6\u51B2\u7A81\uFF0C\u653E\u5F03\u76F4\u63A5\u5339\u914D"));
+            continue;
+          }
           console.log("".concat(config.name, " /match \u63A5\u53E3\u76F4\u63A5\u5339\u914D\u6210\u529F"));
-          var match = matchResult.animes[0];
           return {
             directMatch: true,
             apiPrefix: config.prefix,
@@ -3429,24 +3573,25 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {string} prefix
    * @returns {Promise<object|null>}
    */
-  async function lsSeasonSearchEpisodes(_season_key, episode, prefix) {
+  async function lsSeasonSearchEpisodes(_season_key, episode, prefix, searchTitle) {
     var seasonInfoListStr = window.localStorage.getItem(_season_key);
     if (!seasonInfoListStr) return null;
     var seasonInfoList = JSON.parse(seasonInfoListStr);
-    var minPositiveDiff = Infinity;
-    var selectedSeasonInfo = null;
-    for (var i = 0; i < seasonInfoList.length; i++) {
-      var seasonInfo = seasonInfoList[i];
-      var adjustedEpisode = episode + seasonInfo.episodeOffset;
-      if (adjustedEpisode > 0 && adjustedEpisode < minPositiveDiff) {
-        minPositiveDiff = adjustedEpisode;
-        selectedSeasonInfo = seasonInfo;
-      }
-    }
+    var selectedSeasonInfo = selectSeasonInfo(searchTitle, seasonInfoList, episode);
     if (selectedSeasonInfo) {
-      var newEpisode = episode + selectedSeasonInfo.episodeOffset;
-      console.log("\u547D\u4E2DseasonInfo\u7F13\u5B58: ".concat(selectedSeasonInfo.name, ",\u504F\u79FB\u91CF: ").concat(selectedSeasonInfo.episodeOffset, ",\u96C6: ").concat(newEpisode));
-      var animaInfo = await fetchSearchEpisodes(selectedSeasonInfo.name, newEpisode, prefix);
+      var episodeOffset = getSeasonEpisodeOffset(selectedSeasonInfo);
+      var newEpisode = Number(episode) + episodeOffset;
+      console.log("\u547D\u4E2DseasonInfo\u7F13\u5B58: ".concat(selectedSeasonInfo.name, ",\u504F\u79FB\u91CF: ").concat(episodeOffset, ",\u96C6: ").concat(newEpisode));
+      var animaInfo = await fetchSearchEpisodes(selectedSeasonInfo.name, newEpisode, selectedSeasonInfo.apiPrefix || prefix);
+      if (animaInfo !== null && animaInfo !== void 0 && animaInfo.animes) {
+        animaInfo.animes = prioritizeSeasonCandidates(searchTitle, animaInfo.animes);
+        var selectedAnimeIndex = animaInfo.animes.findIndex(function (anime) {
+          return anime.animeId == selectedSeasonInfo.animeId;
+        });
+        if (selectedAnimeIndex > 0) {
+          animaInfo.animes.unshift(animaInfo.animes.splice(selectedAnimeIndex, 1)[0]);
+        }
+      }
       return {
         animaInfo: animaInfo,
         newEpisode: newEpisode
@@ -3486,14 +3631,12 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     };
     var currentPriority = Array.isArray(apiPriority) && apiPriority[0] === 'custom' && apiConfigs.custom.enabled && (_apiConfigs$custom$pr = apiConfigs.custom.prefix) !== null && _apiConfigs$custom$pr !== void 0 && _apiConfigs$custom$pr.trim() ? 'custom' : 'official';
     var selectedApiConfig = apiConfigs[currentPriority].enabled && (_apiConfigs$currentPr = apiConfigs[currentPriority].prefix) !== null && _apiConfigs$currentPr !== void 0 && _apiConfigs$currentPr.trim() ? apiConfigs[currentPriority] : apiConfigs.custom;
-    var animaRes = await lsSeasonSearchEpisodes(_season_key, episode, selectedApiConfig.prefix);
+    var animaRes = await lsSeasonSearchEpisodes(_season_key, episode, selectedApiConfig.prefix, animeName);
     if ((animaRes === null || animaRes === void 0 || (_animaRes$animaInfo = animaRes.animaInfo) === null || _animaRes$animaInfo === void 0 || (_animaRes$animaInfo = _animaRes$animaInfo.animes) === null || _animaRes$animaInfo === void 0 ? void 0 : _animaRes$animaInfo.length) > 0) {
-      var bgmEpisodeIndex = animaRes.newEpisode - 1;
       console.log("[\u81EA\u52A8\u5339\u914D] \u547D\u4E2D\u8D5B\u5B63\u7F13\u5B58\uFF0C\u76F4\u63A5\u4F7F\u7528");
       return {
         animeOriginalTitle: '',
-        animaInfo: animaRes.animaInfo,
-        bgmEpisodeIndex: bgmEpisodeIndex
+        animaInfo: animaRes.animaInfo
       };
     }
     var tmdbMatchResult = await tryMatchByTmdbId(itemInfoMap, apiConfigs, apiPriority);
@@ -3520,6 +3663,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         }
         var searchAnimaInfo = await fetchSearchEpisodes(searchTitle, searchEpisode, config.prefix);
         if (((_searchAnimaInfo = searchAnimaInfo) === null || _searchAnimaInfo === void 0 || (_searchAnimaInfo = _searchAnimaInfo.animes) === null || _searchAnimaInfo === void 0 ? void 0 : _searchAnimaInfo.length) > 0) {
+          searchAnimaInfo.animes = prioritizeSeasonCandidates(searchTitle, searchAnimaInfo.animes);
           return {
             animaInfo: searchAnimaInfo,
             apiPrefix: config.prefix
@@ -3527,6 +3671,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         }
         searchAnimaInfo = await fetchSearchEpisodes(episodeName, null, config.prefix);
         if (((_searchAnimaInfo2 = searchAnimaInfo) === null || _searchAnimaInfo2 === void 0 || (_searchAnimaInfo2 = _searchAnimaInfo2.animes) === null || _searchAnimaInfo2 === void 0 ? void 0 : _searchAnimaInfo2.length) > 0) {
+          searchAnimaInfo.animes = prioritizeSeasonCandidates(episodeName, searchAnimaInfo.animes);
           return {
             animaInfo: searchAnimaInfo,
             apiPrefix: config.prefix
@@ -3540,6 +3685,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     }
     var animaInfo = await fetchSearchEpisodes(animeName, episode, selectedApiConfig.prefix);
     if ((animaInfo === null || animaInfo === void 0 || (_animaInfo$animes = animaInfo.animes) === null || _animaInfo$animes === void 0 ? void 0 : _animaInfo$animes.length) > 0) {
+      animaInfo.animes = prioritizeSeasonCandidates(animeName, animaInfo.animes);
       return {
         animeOriginalTitle: '',
         animaInfo: animaInfo
@@ -3554,7 +3700,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @returns {Promise<object|null>}
    */
   async function getEpisodeInfo() {
-    var _window$ede, _res$animaInfo, _res$bgmEpisodeIndex;
+    var _window$ede2, _res$animaInfo;
     var is_auto = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : true;
     var appendvideoOsdDanmakuInfo = arguments.length > 1 ? arguments[1] : undefined;
     var itemInfoMap = await getMapByEmbyItemInfo();
@@ -3562,7 +3708,32 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var _episode_key = itemInfoMap._episode_key,
       animeId = itemInfoMap.animeId,
       episode = itemInfoMap.episode,
-      seriesOrMovieId = itemInfoMap.seriesOrMovieId;
+      seriesOrMovieId = itemInfoMap.seriesOrMovieId,
+      animeName = itemInfoMap.animeName;
+
+    // 手动匹配拥有最高优先级，不受自动缓存、季度校验或上下集推理覆盖。
+    try {
+      var _window$ede;
+      var manualKeys = [];
+      if (_episode_key) manualKeys.push("_ede_manual_match_".concat(_episode_key));
+      if ((_window$ede = window.ede) !== null && _window$ede !== void 0 && _window$ede.itemId) manualKeys.push("_ede_manual_match_".concat(window.ede.itemId));
+      for (var _i = 0, _manualKeys = manualKeys; _i < _manualKeys.length; _i++) {
+        var manualKey = _manualKeys[_i];
+        try {
+          var manualValue = window.localStorage.getItem(manualKey);
+          if (!manualValue) continue;
+          var manualInfo = JSON.parse(manualValue);
+          if (manualInfo !== null && manualInfo !== void 0 && manualInfo.episodeId) {
+            console.log('[手动匹配] 命中持久化手动选择:', manualInfo.animeTitle, '-', manualInfo.episodeTitle);
+            return manualInfo;
+          }
+        } catch (error) {
+          console.warn("[\u624B\u52A8\u5339\u914D] \u8BB0\u5F55\u635F\u574F\uFF0C\u5FFD\u7565 ".concat(manualKey, ":"), error);
+        }
+      }
+    } catch (error) {
+      console.warn('[手动匹配] 读取持久化记录失败:', error);
+    }
     var useOfficialApi = lsGetItem(lsKeys.useOfficialApi.id);
     var useCustomApi = lsGetItem(lsKeys.useCustomApi.id);
     var apiPriority = lsGetItem(lsKeys.apiPriority.id) || ['official', 'custom'];
@@ -3573,10 +3744,21 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     });
     var unique_episode_key = lsLocalKeys.apiPrefix + "".concat(enabledApis.join('_'), "_") + _episode_key;
     if (is_auto && window.localStorage.getItem(unique_episode_key)) {
-      return JSON.parse(window.localStorage.getItem(unique_episode_key));
+      try {
+        var cachedEpisodeInfo = JSON.parse(window.localStorage.getItem(unique_episode_key));
+        var cachedEpisodeNumber = (Number.isFinite(Number(cachedEpisodeInfo.episodeIndex)) ? Number(cachedEpisodeInfo.episodeIndex) : -1) + 1;
+        var seasonCompatible = isSeasonCompatible(animeName, cachedEpisodeInfo.animeTitle, cachedEpisodeInfo.animeType);
+        var episodeCompatible = !Number.isFinite(Number(episode)) || cachedEpisodeNumber === Number(episode);
+        if (seasonCompatible && episodeCompatible) return cachedEpisodeInfo;
+        console.warn("[\u81EA\u52A8\u5339\u914D] \u7F13\u5B58\u4E0E\u5F53\u524D\u5B63\u5EA6\u6216\u96C6\u6570\u4E0D\u7B26\uFF0C\u6E05\u9664\u91CD\u641C: \u7F13\u5B58\u7B2C".concat(cachedEpisodeNumber, "\u8BDD, \u5F53\u524D\u7B2C").concat(episode, "\u8BDD"));
+        window.localStorage.removeItem(unique_episode_key);
+      } catch (error) {
+        console.warn('[自动匹配] 本地匹配缓存损坏，清除重搜:', error);
+        window.localStorage.removeItem(unique_episode_key);
+      }
     }
-    var previous_info = (_window$ede = window.ede) === null || _window$ede === void 0 ? void 0 : _window$ede.previous_episode_info;
-    if (is_auto && previous_info !== null && previous_info !== void 0 && previous_info.episodeId && previous_info.seriesOrMovieId === seriesOrMovieId) {
+    var previous_info = (_window$ede2 = window.ede) === null || _window$ede2 === void 0 ? void 0 : _window$ede2.previous_episode_info;
+    if (is_auto && previous_info !== null && previous_info !== void 0 && previous_info.episodeId && previous_info.seriesOrMovieId === seriesOrMovieId && isSeasonCompatible(animeName, previous_info.animeTitle, previous_info.animeType)) {
       var previousEpisodeIndex = previous_info.episodeIndex;
       var currentEpisodeNumber = episode;
       var previousEpisodeId = parseInt(previous_info.episodeId, 10);
@@ -3594,10 +3776,10 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
             episodeTitle: "\u7B2C ".concat(currentEpisodeNumber, " \u96C6 (\u63A8\u7406)"),
             animeId: previous_info.animeId,
             animeTitle: previous_info.animeTitle,
+            animeType: previous_info.animeType,
             imageUrl: previous_info.imageUrl,
             seriesOrMovieId: seriesOrMovieId,
-            episodeIndex: currentEpisodeNumber - 1,
-            bgmEpisodeIndex: currentEpisodeNumber - 1
+            episodeIndex: currentEpisodeNumber - 1
           });
         }
       }
@@ -3618,9 +3800,9 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         episodeId: _ep.episodeId,
         episodeTitle: _ep.episodeTitle,
         episodeIndex: episodeIndex,
-        bgmEpisodeIndex: episodeIndex,
         animeId: res.episodeInfo.animeId,
         animeTitle: res.episodeInfo.animeTitle,
+        animeType: res.episodeInfo.animeType || res.episodeInfo.type,
         animeOriginalTitle: '',
         imageUrl: res.episodeInfo.imageUrl,
         apiName: res.apiName,
@@ -3637,10 +3819,17 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var _res$animeOriginalTit = res.animeOriginalTitle,
       animeOriginalTitle = _res$animeOriginalTit === void 0 ? '' : _res$animeOriginalTit,
       animaInfo = res.animaInfo;
-    var selectAnime_id = 0;
+    var selectAnime_id = animaInfo.animes.findIndex(function (candidate) {
+      return isSeasonCompatible(animeName, candidate.animeTitle, candidate.type);
+    });
+    if (selectAnime_id < 0) {
+      console.warn('[自动匹配] 搜索结果均与当前季度冲突，放弃自动匹配');
+      if (typeof appendvideoOsdDanmakuInfo === 'function') appendvideoOsdDanmakuInfo();
+      return null;
+    }
     if (animeId != -1) {
       var idx = animaInfo.animes.findIndex(function (a) {
-        return a.animeId == animeId;
+        return a.animeId == animeId && isSeasonCompatible(animeName, a.animeTitle, a.type);
       });
       if (idx >= 0) selectAnime_id = idx;
     }
@@ -3652,9 +3841,9 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       episodeId: ep.episodeId,
       episodeTitle: ep.episodeTitle,
       episodeIndex: episodeIndex,
-      bgmEpisodeIndex: (_res$bgmEpisodeIndex = res.bgmEpisodeIndex) !== null && _res$bgmEpisodeIndex !== void 0 ? _res$bgmEpisodeIndex : episodeIndex,
       animeId: anime.animeId,
       animeTitle: anime.animeTitle,
+      animeType: anime.type,
       animeOriginalTitle: animeOriginalTitle,
       imageUrl: anime.imageUrl || (anime.animeId ? dandanplayApi.posterImg(anime.animeId) : undefined),
       apiPrefix: res.apiPrefix,
@@ -3805,41 +3994,46 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {string} loadType - LOAD_TYPE
    * @param {object} [hooks] - { buildCurrentDanmakuInfo }
    */
-  function loadDanmaku() {
+  async function loadDanmaku() {
     var _window$ede3;
     var loadType = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : LOAD_TYPE.CHECK;
     var hooks = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
     var _media = document.querySelector(mediaQueryStr);
     if (!_media) {
-      return console.warn('用户已退出视频播放,停止加载弹幕');
+      console.warn('用户已退出视频播放,停止加载弹幕');
+      return false;
     }
+    if (loadType === LOAD_TYPE.RELOAD) window.ede.loading = false;
     if ((_window$ede3 = window.ede) !== null && _window$ede3 !== void 0 && _window$ede3.loading) {
       console.log('正在重新加载');
-      return;
+      return false;
     }
     window.ede.loading = true;
     var buildCurrentDanmakuInfoFn = hooks.buildCurrentDanmakuInfo || function () {};
     var appendvideoOsdDanmakuInfoFn = hooks.appendvideoOsdDanmakuInfo || function () {};
-    if (lsGetItem(lsKeys.useFetchPluginXml.id)) {
-      getMapByEmbyItemInfo().then(function (itemInfoMap) {
-        return getCommentsByPluginApi(window.ede.itemId).then(function (comments) {
-          if ((comments === null || comments === void 0 ? void 0 : comments.length) > 0) {
-            return createDanmaku(comments, {
-              buildCurrentDanmakuInfo: buildCurrentDanmakuInfoFn,
-              appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn
-            }).then(function () {
-              window.ede.loading = false;
-              var ctr = getById(eleIds.danmakuCtr);
-              if (ctr) ctr.style.opacity = '1';
-            });
-          }
-          throw new Error('useFetchPluginXml 失败');
-        });
-      }).catch(function () {
-        return loadOnlineDanmaku(loadType, hooks);
-      });
-    } else {
-      loadOnlineDanmaku(loadType, hooks);
+    var createHooks = {
+      buildCurrentDanmakuInfo: buildCurrentDanmakuInfoFn,
+      appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn
+    };
+    try {
+      window.ede.onlineDanmakuOk = false;
+      var onlineLoaded = await loadOnlineDanmaku(loadType, hooks);
+      if (onlineLoaded || !lsGetItem(lsKeys.useFetchPluginXml.id)) return onlineLoaded;
+      var comments = await getCommentsByPluginApi(window.ede.itemId);
+      if (!(comments !== null && comments !== void 0 && comments.length)) return false;
+      await createDanmaku(comments, createHooks);
+      window.ede.onlineDanmakuOk = true;
+      console.log("".concat(lsKeys.useFetchPluginXml.name, ":\u5C31\u4F4D(\u5728\u7EBF\u5931\u8D25\u56DE\u9000\u670D\u52A1\u7AEF)"));
+      var ctr = getById(eleIds.danmakuCtr);
+      if (ctr) ctr.style.opacity = '1';
+      var title = getById(eleIds.videoOsdDanmakuTitle);
+      if (title) title.innerText = "\u5F39\u5E55\uFF1A".concat(lsKeys.useFetchPluginXml.name, " - ").concat(comments.length, "\u6761");
+      return true;
+    } catch (error) {
+      console.error('[加载]弹幕加载失败:', error);
+      return false;
+    } finally {
+      window.ede.loading = false;
     }
   }
 
@@ -3852,63 +4046,55 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var hooks = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
     var buildCurrentDanmakuInfoFn = hooks.buildCurrentDanmakuInfo || function () {};
     var appendvideoOsdDanmakuInfoFn = hooks.appendvideoOsdDanmakuInfo || function () {};
-    getEpisodeInfo(loadType !== LOAD_TYPE.SEARCH, appendvideoOsdDanmakuInfoFn).then(function (info) {
-      return new Promise(function (resolve, reject) {
-        var _window$ede4, _window$ede5;
-        if (!info) {
-          reject(loadType !== LOAD_TYPE.INIT ? '播放器未完成加载' : null);
-          return;
-        }
-        if (loadType !== LOAD_TYPE.SEARCH && loadType !== LOAD_TYPE.REFRESH && loadType !== LOAD_TYPE.RELOAD && loadType !== LOAD_TYPE.INIT && (_window$ede4 = window.ede) !== null && _window$ede4 !== void 0 && _window$ede4.danmaku && ((_window$ede5 = window.ede) === null || _window$ede5 === void 0 || (_window$ede5 = _window$ede5.episode_info) === null || _window$ede5 === void 0 ? void 0 : _window$ede5.episodeId) == info.episodeId) {
-          reject('当前播放视频未变动');
-          return;
-        }
-        window.ede.episode_info = info;
-        resolve(info.episodeId);
-      });
-    }).then(function (episodeId) {
-      if (episodeId) {
-        var _window$ede6;
-        if (loadType === LOAD_TYPE.RELOAD && (_window$ede6 = window.ede) !== null && _window$ede6 !== void 0 && (_window$ede6 = _window$ede6.danmuCache) !== null && _window$ede6 !== void 0 && _window$ede6[episodeId]) {
-          createDanmaku(window.ede.danmuCache[episodeId], {
-            buildCurrentDanmakuInfo: buildCurrentDanmakuInfoFn,
-            appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn
-          }).catch(console.log);
-        } else {
-          fetchComment(episodeId).then(function (comments) {
-            window.ede.danmuCache = window.ede.danmuCache || {};
-            window.ede.danmuCache[episodeId] = comments;
-            createDanmaku(comments, {
-              buildCurrentDanmakuInfo: buildCurrentDanmakuInfoFn,
-              appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn
-            }).catch(console.log);
-          });
-        }
+    var createHooks = {
+      buildCurrentDanmakuInfo: buildCurrentDanmakuInfoFn,
+      appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn
+    };
+    try {
+      var _window$ede4, _window$ede5, _window$ede6, _comments2, _window$ede7;
+      var info = await getEpisodeInfo(loadType !== LOAD_TYPE.SEARCH, appendvideoOsdDanmakuInfoFn);
+      if (!info) {
+        if (loadType !== LOAD_TYPE.INIT) console.log('播放器未完成加载');
+        return false;
       }
-    }, function (msg) {
-      if (msg) console.log(msg);
-    }).then(function () {
-      var _window$ede7, _window$ede8;
-      var extCommentCache = ((_window$ede7 = window.ede) === null || _window$ede7 === void 0 || (_window$ede7 = _window$ede7.extCommentCache) === null || _window$ede7 === void 0 ? void 0 : _window$ede7[window.ede.itemId]) || {};
-      var hooks = {
-        buildCurrentDanmakuInfo: buildCurrentDanmakuInfoFn,
-        appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn
-      };
-      objectEntries(extCommentCache).forEach(function (_ref) {
-        var _ref2 = _slicedToArray(_ref, 2),
-          key = _ref2[0],
-          val = _ref2[1];
-        return addExtCommentsForLoad(key, val, hooks);
-      });
-      if ((_window$ede8 = window.ede) !== null && _window$ede8 !== void 0 && _window$ede8.episode_info) {
+      if (![LOAD_TYPE.SEARCH, LOAD_TYPE.REFRESH, LOAD_TYPE.RELOAD, LOAD_TYPE.INIT].includes(loadType) && (_window$ede4 = window.ede) !== null && _window$ede4 !== void 0 && _window$ede4.danmaku && ((_window$ede5 = window.ede) === null || _window$ede5 === void 0 || (_window$ede5 = _window$ede5.episode_info) === null || _window$ede5 === void 0 ? void 0 : _window$ede5.episodeId) == info.episodeId) {
+        console.log('当前播放视频未变动');
+        window.ede.onlineDanmakuOk = true;
+        return true;
+      }
+      if (window.ede.episode_info) {
         window.ede.previous_episode_info = _objectSpread2({}, window.ede.episode_info);
       }
-      window.ede.loading = false;
+      window.ede.episode_info = info;
+      var episodeId = info.episodeId;
+      var comments = loadType === LOAD_TYPE.RELOAD ? (_window$ede6 = window.ede) === null || _window$ede6 === void 0 || (_window$ede6 = _window$ede6.danmuCache) === null || _window$ede6 === void 0 ? void 0 : _window$ede6[episodeId] : null;
+      if (!comments) {
+        comments = await fetchComment(episodeId);
+        window.ede.danmuCache = window.ede.danmuCache || {};
+        window.ede.danmuCache[episodeId] = comments;
+      }
+      if (!((_comments2 = comments) !== null && _comments2 !== void 0 && _comments2.length)) return false;
+      await createDanmaku(comments, createHooks);
+      window.ede.onlineDanmakuOk = true;
+      var extCommentCache = ((_window$ede7 = window.ede) === null || _window$ede7 === void 0 || (_window$ede7 = _window$ede7.extCommentCache) === null || _window$ede7 === void 0 ? void 0 : _window$ede7[window.ede.itemId]) || {};
+      try {
+        await Promise.all(objectEntries(extCommentCache).map(function (_ref) {
+          var _ref2 = _slicedToArray(_ref, 2),
+            key = _ref2[0],
+            val = _ref2[1];
+          return addExtCommentsForLoad(key, val, createHooks);
+        }));
+      } catch (error) {
+        console.warn('[在线弹幕]附加弹幕加载失败，不影响主弹幕:', error);
+      }
       var ctr = getById(eleIds.danmakuCtr);
       if (ctr) ctr.style.opacity = '1';
-    }).catch(function () {
-      window.ede.loading = false;
-    });
+      return true;
+    } catch (error) {
+      console.error('[在线弹幕]加载失败:', error);
+      window.ede.onlineDanmakuOk = false;
+      return false;
+    }
   }
 
   function doDanmakuSwitch$1() {
@@ -4297,24 +4483,35 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    */
 
   /**
-   * 修正 Bangumi 集数索引（番剧非第一季时）
-   * @param {number} currentBgmEpisodeIndex
-   * @param {object} danDanPlayBangumi
-   * @returns {number}
+   * 根据 episodeId 在 bangumi.episodes 中的下标得到 bgmEpisodeIndex（与 Bangumi API data[] 顺序一致）
+   * 优先用 episodeId 精确匹配；否则用 animeId 与 episodeId 的关系（episodeId = animeId*10000+集数）推导正片集数再查找
+   * @param {number} episodeId - 弹弹 play 节目 id
+   * @param {number} animeId - 弹弹 play 番剧 id
+   * @param {object} danDanPlayBangumi - getBangumi(animeId) 返回的 bangumi
+   * @returns {number} 下标，无法解析时返回 -1
    */
-  function offsetBgmEpisodeIndex(currentBgmEpisodeIndex, danDanPlayBangumi) {
-    if (!danDanPlayBangumi) {
-      return currentBgmEpisodeIndex;
+  function resolveBgmEpisodeIndex(episodeId, animeId, danDanPlayBangumi) {
+    var _danDanPlayBangumi$ep;
+    if (!(danDanPlayBangumi !== null && danDanPlayBangumi !== void 0 && (_danDanPlayBangumi$ep = danDanPlayBangumi.episodes) !== null && _danDanPlayBangumi$ep !== void 0 && _danDanPlayBangumi$ep.length)) {
+      return -1;
     }
-    var bangumiEp = danDanPlayBangumi.episodes[currentBgmEpisodeIndex];
-    if (!bangumiEp) {
-      console.log("\u672A\u5339\u914D\u5230 danDanPlayBangumi \u756A\u5267\u96C6\u6570,\u5267\u96C6\u4E0D\u4E3A\u7B2C\u4E00\u5B63,\u5C1D\u8BD5\u5207\u6362\u63A5\u53E3\u6570\u636E\u5339\u914D\u8FD4\u56DE\u4FEE\u6B63\u540E\u7684 bgmEpisodeIndex");
-      return danDanPlayBangumi.episodes.findIndex(function (ep) {
-        return ep.episodeNumber == currentBgmEpisodeIndex + 1;
+    var episodes = danDanPlayBangumi.episodes;
+    var idx = episodes.findIndex(function (ep) {
+      return ep.episodeId === episodeId;
+    });
+    if (idx >= 0) {
+      return idx;
+    }
+    // 关系：episodeId = animeId * 10000 + 集数；正片 offset 1–8999，特典多为 9xxx
+    var offset = episodeId - animeId * 10000;
+    if (offset >= 1 && offset < 9000) {
+      var epNum = offset;
+      idx = episodes.findIndex(function (ep) {
+        return String(ep.episodeNumber) === String(epNum);
       });
-    } else {
-      return currentBgmEpisodeIndex;
+      if (idx >= 0) return idx;
     }
+    return -1;
   }
 
   /**
@@ -4322,6 +4519,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @returns {Promise<object>}
    */
   async function getEpisodeBangumiRel() {
+    var _bangumiInfoLs;
     var episode_info = window.ede.episode_info;
     var _bangumi_key = lsLocalKeys.bangumiEpInfoPrefix + episode_info.episodeId;
     var bangumiInfoLs = localStorage.getItem(_bangumi_key);
@@ -4332,17 +4530,28 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var subjectId = bangumiInfoLs ? bangumiInfoLs.subjectId : null;
     var bangumiUrl = bangumiInfoLs ? bangumiInfoLs.bangumiUrl : null;
     var animeId = episode_info.animeId;
-    if (!subjectId) {
+    if (subjectId && ((_bangumiInfoLs = bangumiInfoLs) === null || _bangumiInfoLs === void 0 ? void 0 : _bangumiInfoLs.bgmEpisodeIndex) != null) {
+      episode_info.bgmEpisodeIndex = bangumiInfoLs.bgmEpisodeIndex;
+    }
+    if (!subjectId || episode_info.bgmEpisodeIndex == null) {
       if (!animeId) {
         throw new Error('未获取到 animeId');
       }
       var danDanPlayBangumiRes = await fetchJson(dandanplayApi.getBangumi(animeId));
-      episode_info.bgmEpisodeIndex = offsetBgmEpisodeIndex(episode_info.bgmEpisodeIndex, danDanPlayBangumiRes.bangumi);
-      bangumiUrl = danDanPlayBangumiRes.bangumi.bangumiUrl;
-      if (!bangumiUrl) {
-        throw new Error('未请求到 bangumiUrl');
+      var bangumi = danDanPlayBangumiRes.bangumi;
+      var episodeId = episode_info.episodeId;
+      var resolved = resolveBgmEpisodeIndex(episodeId, animeId, bangumi);
+      if (resolved < 0) {
+        throw new Error("\u65E0\u6CD5\u4ECE episodeId=".concat(episodeId, " animeId=").concat(animeId, " \u89E3\u6790 Bangumi \u7AE0\u8282\u4E0B\u6807"));
       }
-      subjectId = parseInt(bangumiUrl.match(/\/(\d+)$/)[1]);
+      episode_info.bgmEpisodeIndex = resolved;
+      if (!subjectId) {
+        bangumiUrl = bangumi.bangumiUrl;
+        if (!bangumiUrl) {
+          throw new Error('未请求到 bangumiUrl');
+        }
+        subjectId = parseInt(bangumiUrl.match(/\/(\d+)$/)[1]);
+      }
     }
     var episodeIndex = episode_info ? episode_info.episodeIndex : null;
     var bgmEpisodeIndex = episode_info ? episode_info.bgmEpisodeIndex : null;
@@ -4623,12 +4832,13 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         console.log("[\u624B\u52A8\u5339\u914D][".concat(config.name, "] \u6B63\u5728\u641C\u7D22: \u6807\u9898='").concat(manualSearchTitle, "', \u96C6\u6570=").concat(manualSearchEpisode || '无'));
         var animaInfo = await fetchSearchEpisodes(manualSearchTitle, manualSearchEpisode, config.prefix);
         if (animaInfo && animaInfo.animes.length > 0) {
+          var _allAnimes;
           console.log("[\u624B\u52A8\u5339\u914D][".concat(config.name, "] \u641C\u7D22\u6210\u529F\uFF0C\u627E\u5230 ").concat(animaInfo.animes.length, " \u4E2A\u7ED3\u679C\u3002"));
           animaInfo.animes.forEach(function (anime) {
             anime.apiPrefix = config.prefix;
             anime.apiName = config.name;
           });
-          allAnimes.push.apply(allAnimes, _toConsumableArray(animaInfo.animes));
+          (_allAnimes = allAnimes).push.apply(_allAnimes, _toConsumableArray(animaInfo.animes));
         } else {
           console.log("[\u624B\u52A8\u5339\u914D][".concat(config.name, "] \u672A\u627E\u5230\u7ED3\u679C\u3002"));
         }
@@ -4651,6 +4861,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       return;
     }
     if (danmakuRemarkEle) danmakuRemarkEle.innerText = '';
+    allAnimes = prioritizeSeasonCandidates(searchName, allAnimes);
     var danmakuAnimeDiv = getById(eleIds.danmakuAnimeDiv);
     var danmakuEpisodeNumDiv = getById(eleIds.danmakuEpisodeNumDiv);
     if (!danmakuAnimeDiv || !danmakuEpisodeNumDiv) return;
@@ -4737,6 +4948,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     if (apiSourceDiv) apiSourceDiv.innerText = "\u6765\u6E90: ".concat(anime.apiName);
   }
   function doDanmakuSwitchEpisode() {
+    var _anime$episodes;
     var animeSelect = getById(eleIds.danmakuAnimeSelect);
     var episodeNumSelect = getById(eleIds.danmakuEpisodeNumSelect);
     if (!animeSelect || !episodeNumSelect) return;
@@ -4749,20 +4961,40 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       episodeId: episodeNumSelect.value,
       episodeTitle: episodeNumSelect.options[episodeNumSelect.selectedIndex].text,
       episodeIndex: episodeNumSelect.selectedIndex,
-      bgmEpisodeIndex: episodeNumSelect.selectedIndex,
       animeId: anime.animeId,
       animeTitle: anime.animeTitle,
+      animeType: anime.type,
       animeOriginalTitle: '',
       imageUrl: anime.imageUrl,
       seriesOrMovieId: seriesOrMovieId,
       apiPrefix: anime.apiPrefix,
       apiName: anime.apiName
     };
-    var seasonInfo = {
-      name: anime.animeTitle,
-      episodeOffset: episodeNumSelect.selectedIndex - window.ede.searchDanmakuOpts.episode
-    };
-    writeLsSeasonInfo(_season_key, seasonInfo);
+    var episodeOptionText = episodeNumSelect.options[episodeNumSelect.selectedIndex].text;
+    var selectedEpisodeTitle = ((_anime$episodes = anime.episodes) === null || _anime$episodes === void 0 || (_anime$episodes = _anime$episodes[episodeNumSelect.selectedIndex]) === null || _anime$episodes === void 0 ? void 0 : _anime$episodes.episodeTitle) || '';
+    var episodeNumberMatch = selectedEpisodeTitle.match(/第\s*(\d+)\s*[话話集]/) || selectedEpisodeTitle.match(/^\s*(?:E(?:P(?:ISODE)?)?\s*)?(\d+)(?:\s*[-－:：.]|\b)/i);
+    var dandanEpisodeNumber = episodeNumberMatch ? parseInt(episodeNumberMatch[1], 10) : NaN;
+    var seasonInfo = null;
+    if (Number.isFinite(dandanEpisodeNumber)) {
+      seasonInfo = createSeasonInfo(anime, dandanEpisodeNumber - 1, Number(window.ede.searchDanmakuOpts.episode) + 1);
+      try {
+        var oldList = JSON.parse(localStorage.getItem(_season_key) || '[]');
+        var pruned = oldList.filter(function (item) {
+          var sameAnime = String(item.animeId) === String(seasonInfo.animeId);
+          var similarName = calculateStringSimilarity(item.name || '', seasonInfo.name || '') >= 0.5;
+          return !(sameAnime || similarName);
+        });
+        if (pruned.length !== oldList.length) {
+          localStorage.setItem(_season_key, JSON.stringify(pruned));
+          console.log("[\u624B\u52A8\u5339\u914D] \u5DF2\u6E05\u7406 ".concat(oldList.length - pruned.length, " \u6761\u65E7\u5B63\u504F\u79FB\u7F13\u5B58"));
+        }
+      } catch (error) {
+        console.warn('[手动匹配] 清理旧季缓存失败:', error);
+      }
+      writeLsSeasonInfo(_season_key, seasonInfo);
+    } else {
+      console.warn('[手动匹配] 无法解析真实集号，跳过季偏移缓存写入:', episodeOptionText);
+    }
     var useOfficialApi = lsGetItem(lsKeys.useOfficialApi.id);
     var useCustomApi = lsGetItem(lsKeys.useCustomApi.id);
     var apiPriority = lsGetItem(lsKeys.apiPriority.id);
@@ -4773,22 +5005,53 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     });
     var unique_episode_key = lsLocalKeys.apiPrefix + "".concat(enabledApis.join('_'), "_") + _episode_key;
     localStorage.setItem(unique_episode_key, JSON.stringify(episodeInfo));
+    try {
+      var manualPayload = JSON.stringify(_objectSpread2(_objectSpread2({}, episodeInfo), {}, {
+        manual: true,
+        savedAt: Date.now()
+      }));
+      if (_episode_key) localStorage.setItem("_ede_manual_match_".concat(_episode_key), manualPayload);
+      if (window.ede.itemId) localStorage.setItem("_ede_manual_match_".concat(window.ede.itemId), manualPayload);
+    } catch (error) {
+      console.warn('[手动匹配] 持久化失败:', error);
+    }
     if (window.ede.episode_info) {
       Object.assign(window.ede.episode_info, episodeInfo);
     } else {
       window.ede.episode_info = episodeInfo;
     }
     window.ede.previous_episode_info = _objectSpread2({}, window.ede.episode_info);
-    console.log('手动匹配成功，已加载新弹幕信息:', episodeInfo);
-    loadDanmaku(LOAD_TYPE.RELOAD);
+    console.log('手动匹配成功，直接加载所选弹幕:', episodeInfo);
+    window.ede.loading = false;
+    window.ede.onlineDanmakuOk = true;
+    fetchComment(episodeInfo.episodeId).then(function (comments) {
+      if (!(comments !== null && comments !== void 0 && comments.length)) throw new Error('所选剧集没有可用弹幕');
+      window.ede.danmuCache[episodeInfo.episodeId] = comments;
+      return createDanmaku(comments, createDanmakuHooks$1);
+    }).then(function () {
+      var ctr = getById(eleIds.danmakuCtr);
+      if (ctr) ctr.style.opacity = '1';
+      appendvideoOsdDanmakuInfo(window.ede.commentsParsed.length);
+    }).catch(function (error) {
+      console.error('手动匹配弹幕加载失败:', error);
+      embyToast({
+        text: "\u624B\u52A8\u5339\u914D\u5F39\u5E55\u52A0\u8F7D\u5931\u8D25: ".concat(error.message || error)
+      });
+    }).finally(function () {
+      window.ede.loading = false;
+    });
     closeEmbyDialog();
   }
   function bindManualMatchButtons() {
     var btnClearCache = getById(eleIds.clearLocalMatchCacheBtn);
     if (!btnClearCache) return;
     btnClearCache.addEventListener('click', function () {
+      var _window$ede$searchDan3;
       var prefixesToClear = [lsLocalKeys.animeEpisodePrefix, lsLocalKeys.animeSeasonPrefix, lsLocalKeys.animePrefix, lsLocalKeys.bangumiEpInfoPrefix, lsLocalKeys.bangumiMe, lsLocalKeys.apiPrefix];
       lsBatchRemove(prefixesToClear);
+      var scopedEpisodeKey = (_window$ede$searchDan3 = window.ede.searchDanmakuOpts) === null || _window$ede$searchDan3 === void 0 ? void 0 : _window$ede$searchDan3._episode_key;
+      if (scopedEpisodeKey) localStorage.removeItem("_ede_manual_match_".concat(scopedEpisodeKey));
+      if (window.ede.itemId) localStorage.removeItem("_ede_manual_match_".concat(window.ede.itemId));
       if (window.ede.episode_info) {
         window.ede.episode_info.episodeId = null;
         window.ede.episode_info.animeId = null;
@@ -4806,12 +5069,12 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     });
   }
   function buildSearchEpisodeEle() {
-    var _window$ede$searchDan3;
+    var _window$ede$searchDan4;
     var searchNameDiv = getById(eleIds.danmakuSearchNameDiv);
     if (!searchNameDiv) return;
     searchNameDiv.append(embyInput({
       id: eleIds.danmakuSearchName,
-      value: ((_window$ede$searchDan3 = window.ede.searchDanmakuOpts) === null || _window$ede$searchDan3 === void 0 ? void 0 : _window$ede$searchDan3.animeName) || '',
+      value: ((_window$ede$searchDan4 = window.ede.searchDanmakuOpts) === null || _window$ede$searchDan4 === void 0 ? void 0 : _window$ede$searchDan4.animeName) || '',
       type: 'search'
     }, doDanmakuSearchEpisode));
     searchNameDiv.append(embyButton({
@@ -6067,6 +6330,17 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       return createDialog();
     }
   }];
+  function isOldEmbyServer() {
+    var _ApiClient$serverVers, _ApiClient;
+    if (typeof ApiClient === 'undefined') return false;
+    if (typeof ApiClient.isMinServerVersion === 'function') {
+      return !ApiClient.isMinServerVersion('4.8.0.0');
+    }
+    var parts = String(((_ApiClient$serverVers = (_ApiClient = ApiClient).serverVersion) === null || _ApiClient$serverVers === void 0 ? void 0 : _ApiClient$serverVers.call(_ApiClient)) || '').split('.').map(function (part) {
+      return Number.parseInt(part, 10) || 0;
+    });
+    return (parts[0] || 0) < 4 || (parts[0] || 0) === 4 && (parts[1] || 0) < 8;
+  }
   function doDanmakuSwitch() {
     var _window$ede;
     var flag = !lsGetItem(lsKeys.switch.id);
@@ -6092,7 +6366,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var _window$ede3;
     if (getById(eleIds.danmakuCtr)) return;
     console.log('正在初始化UI');
-    if (typeof ApiClient !== 'undefined' && parseFloat(ApiClient.serverVersion()) < 4.8) {
+    if (isOldEmbyServer()) {
       setMediaContainerQueryStr('div[data-type="video-osd"]');
       setVersionOld(true);
     }
@@ -6459,6 +6733,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    */
   (function () {
 
+    migrateMatchCacheEpoch();
     refreshEventListener({
       viewshow: onViewShow
     });

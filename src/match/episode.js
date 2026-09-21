@@ -9,6 +9,11 @@ import { fetchSearchEpisodes } from './search.js';
 import { tryMatchByTmdbId } from './tmdb.js';
 import { tryMatchByHash } from './hash.js';
 import { autoFailback } from './fallback.js';
+import {
+    getSeasonEpisodeOffset,
+    prioritizeSeasonCandidates,
+    selectSeasonInfo,
+} from './season.js';
 
 /**
  * 写入赛季信息到 localStorage
@@ -54,27 +59,31 @@ export function parseAnimeName(animeName) {
  * @param {string} prefix
  * @returns {Promise<object|null>}
  */
-export async function lsSeasonSearchEpisodes(_season_key, episode, prefix) {
+export async function lsSeasonSearchEpisodes(_season_key, episode, prefix, searchTitle) {
     const seasonInfoListStr = window.localStorage.getItem(_season_key);
     if (!seasonInfoListStr) return null;
 
     const seasonInfoList = JSON.parse(seasonInfoListStr);
-    let minPositiveDiff = Infinity;
-    let selectedSeasonInfo = null;
-
-    for (let i = 0; i < seasonInfoList.length; i++) {
-        const seasonInfo = seasonInfoList[i];
-        const adjustedEpisode = episode + seasonInfo.episodeOffset;
-        if (adjustedEpisode > 0 && adjustedEpisode < minPositiveDiff) {
-            minPositiveDiff = adjustedEpisode;
-            selectedSeasonInfo = seasonInfo;
-        }
-    }
+    const selectedSeasonInfo = selectSeasonInfo(searchTitle, seasonInfoList, episode);
 
     if (selectedSeasonInfo) {
-        const newEpisode = episode + selectedSeasonInfo.episodeOffset;
-        console.log(`命中seasonInfo缓存: ${selectedSeasonInfo.name},偏移量: ${selectedSeasonInfo.episodeOffset},集: ${newEpisode}`);
-        const animaInfo = await fetchSearchEpisodes(selectedSeasonInfo.name, newEpisode, prefix);
+        const episodeOffset = getSeasonEpisodeOffset(selectedSeasonInfo);
+        const newEpisode = Number(episode) + episodeOffset;
+        console.log(`命中seasonInfo缓存: ${selectedSeasonInfo.name},偏移量: ${episodeOffset},集: ${newEpisode}`);
+        const animaInfo = await fetchSearchEpisodes(
+            selectedSeasonInfo.name,
+            newEpisode,
+            selectedSeasonInfo.apiPrefix || prefix
+        );
+        if (animaInfo?.animes) {
+            animaInfo.animes = prioritizeSeasonCandidates(searchTitle, animaInfo.animes);
+            const selectedAnimeIndex = animaInfo.animes.findIndex(
+                (anime) => anime.animeId == selectedSeasonInfo.animeId
+            );
+            if (selectedAnimeIndex > 0) {
+                animaInfo.animes.unshift(animaInfo.animes.splice(selectedAnimeIndex, 1)[0]);
+            }
+        }
         return { animaInfo, newEpisode };
     }
     return null;
@@ -125,7 +134,12 @@ export async function searchEpisodes(itemInfoMap) {
             ? apiConfigs[currentPriority]
             : apiConfigs.custom;
 
-    const animaRes = await lsSeasonSearchEpisodes(_season_key, episode, selectedApiConfig.prefix);
+    const animaRes = await lsSeasonSearchEpisodes(
+        _season_key,
+        episode,
+        selectedApiConfig.prefix,
+        animeName
+    );
     if (animaRes?.animaInfo?.animes?.length > 0) {
         console.log(`[自动匹配] 命中赛季缓存，直接使用`);
         return { animeOriginalTitle: '', animaInfo: animaRes.animaInfo };
@@ -155,17 +169,20 @@ export async function searchEpisodes(itemInfoMap) {
 
         let searchAnimaInfo = await fetchSearchEpisodes(searchTitle, searchEpisode, config.prefix);
         if (searchAnimaInfo?.animes?.length > 0) {
+            searchAnimaInfo.animes = prioritizeSeasonCandidates(searchTitle, searchAnimaInfo.animes);
             return { animaInfo: searchAnimaInfo, apiPrefix: config.prefix };
         }
 
         searchAnimaInfo = await fetchSearchEpisodes(episodeName, null, config.prefix);
         if (searchAnimaInfo?.animes?.length > 0) {
+            searchAnimaInfo.animes = prioritizeSeasonCandidates(episodeName, searchAnimaInfo.animes);
             return { animaInfo: searchAnimaInfo, apiPrefix: config.prefix };
         }
     }
 
     const animaInfo = await fetchSearchEpisodes(animeName, episode, selectedApiConfig.prefix);
     if (animaInfo?.animes?.length > 0) {
+        animaInfo.animes = prioritizeSeasonCandidates(animeName, animaInfo.animes);
         return { animeOriginalTitle: '', animaInfo };
     }
 

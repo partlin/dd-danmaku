@@ -10,4 +10,6 @@ export const lsLocalKeys = {
     bangumiEpInfoPrefix: '_bangumi_episode_id_rel_',
     bangumiMe: '_bangumi_me',
     apiPrefix: '_api_',
+    manualMatchPrefix: '_ede_manual_match_',
+    matchEpoch: '_ede_match_epoch',
 };

@@ -5,9 +5,12 @@
  */
 import { refreshEventListener } from './events/emby-events.js';
 import { onViewShow, beforeDestroy } from './events/view.js';
+import { migrateMatchCacheEpoch } from './core/storage.js';
 
 (function () {
     'use strict';
+
+    migrateMatchCacheEpoch();
 
     refreshEventListener({ viewshow: onViewShow });
     refreshEventListener({ viewbeforehide: beforeDestroy });

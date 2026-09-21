@@ -39,7 +39,15 @@ function danmakuBootstrap() {
 var skipInnerModule=false;
 try{throw new Error()}catch(e){skipInnerModule=!!(e.stack&&e.stack.includes('CustomCssJS'));}
 if(!skipInnerModule){
+/*
+ * Emby 会在全局暴露 AMD define。若不处理，上游 UMD 包装器会把自身注册为
+ * 匿名 AMD 模块，污染 Emby 的下一次 require() 调用，而不是设置 window.Danmaku。
+ * 此处屏蔽 CommonJS/AMD 全局变量，确保直接脚本、用户脚本和 Android 构建
+ * 始终走浏览器全局变量分支。
+ */
+(function(define,module,exports){
 ${danmakuInline}
+})(undefined,undefined,undefined);
 }else if(typeof Emby!=='undefined'&&Emby.importModule){
 var p=localStorage.getItem('danmakuCustomeDanmakuUrl')||'https://danmaku.7o7o.cc/danmaku.min.js';
 Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){console.error('Danmaku load error:',e);});

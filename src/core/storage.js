@@ -5,6 +5,9 @@
 
 import { lsGetItem, lsGetKeyById, lsKeys } from '../config/api.js';
 import { objectEntries } from '../utils/helpers.js';
+import { lsLocalKeys } from '../config/ls-local-keys.js';
+
+export const MATCH_CACHE_EPOCH = '4';
 
 export function lsSetItem(id, value) {
     if (!lsGetKeyById(id)) {
@@ -60,4 +63,29 @@ export function lsBatchRemove(prefixes) {
             .filter((key) => prefixes.some((prefix) => key.startsWith(prefix)))
             .map((key) => localStorage.removeItem(key)).length > 0
     );
+}
+
+/**
+ * 一次性清理旧版自动匹配缓存，保留用户设置与手动匹配记录。
+ */
+export function migrateMatchCacheEpoch() {
+    try {
+        if (localStorage.getItem(lsLocalKeys.matchEpoch) === MATCH_CACHE_EPOCH) return;
+        const prefixes = [
+            lsLocalKeys.animeEpisodePrefix,
+            lsLocalKeys.animeSeasonPrefix,
+            lsLocalKeys.animePrefix,
+            lsLocalKeys.apiPrefix,
+        ];
+        const doomed = [];
+        for (let index = 0; index < localStorage.length; index++) {
+            const key = localStorage.key(index);
+            if (key && prefixes.some((prefix) => key.startsWith(prefix))) doomed.push(key);
+        }
+        doomed.forEach((key) => localStorage.removeItem(key));
+        localStorage.setItem(lsLocalKeys.matchEpoch, MATCH_CACHE_EPOCH);
+        console.log(`[缓存纪元] 已升级到 v${MATCH_CACHE_EPOCH}，清除 ${doomed.length} 条旧自动匹配缓存`);
+    } catch (error) {
+        console.warn('[缓存纪元] 迁移失败:', error);
+    }
 }

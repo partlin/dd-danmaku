@@ -37,6 +37,17 @@ const mediaBtnOpts = [
     },
 ];
 
+function isOldEmbyServer() {
+    if (typeof ApiClient === 'undefined') return false;
+    if (typeof ApiClient.isMinServerVersion === 'function') {
+        return !ApiClient.isMinServerVersion('4.8.0.0');
+    }
+    const parts = String(ApiClient.serverVersion?.() || '')
+        .split('.')
+        .map((part) => Number.parseInt(part, 10) || 0);
+    return (parts[0] || 0) < 4 || ((parts[0] || 0) === 4 && (parts[1] || 0) < 8);
+}
+
 function doDanmakuSwitch() {
     const flag = !lsGetItem(lsKeys.switch.id);
     lsSetItem(lsKeys.switch.id, flag);
@@ -61,7 +72,7 @@ export function initUI() {
     if (getById(eleIds.danmakuCtr)) return;
     console.log('正在初始化UI');
 
-    if (typeof ApiClient !== 'undefined' && parseFloat(ApiClient.serverVersion()) < 4.8) {
+    if (isOldEmbyServer()) {
         setMediaContainerQueryStr('div[data-type="video-osd"]');
         setVersionOld(true);
     }

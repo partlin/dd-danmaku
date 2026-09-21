@@ -5,6 +5,7 @@
 
 import { fetchMatchApi } from './search.js';
 import { selectBestMatch } from './fallback.js';
+import { isSeasonCompatible, prioritizeSeasonCandidates } from './season.js';
 
 /**
  * 简化的 MD5 实现（与 ede.js 保持一致）
@@ -131,8 +132,15 @@ export async function tryMatchByHash(animeName, streamUrl, size, duration, apiCo
         const matchResult = await fetchMatchApi(matchPayload, config.prefix);
 
         if (matchResult?.isMatched && matchResult.animes?.length > 0) {
+            const candidates = prioritizeSeasonCandidates(animeName, matchResult.animes);
+            const match = candidates.find((candidate) =>
+                isSeasonCompatible(animeName, candidate.animeTitle, candidate.type)
+            );
+            if (!match) {
+                console.warn(`${config.name} /match 接口命中结果与当前季度冲突，放弃直接匹配`);
+                continue;
+            }
             console.log(`${config.name} /match 接口直接匹配成功`);
-            const match = matchResult.animes[0];
             return {
                 directMatch: true,
                 apiPrefix: config.prefix,

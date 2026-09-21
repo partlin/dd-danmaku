@@ -56,6 +56,7 @@ export async function tryMatchByTmdbId(itemInfoMap, apiConfigs, apiPriority) {
                         episodeTitle: ep.episodeTitle,
                         animeId: firstAnime.animeId,
                         animeTitle: firstAnime.animeTitle,
+                        animeType: firstAnime.type,
                         imageUrl: dandanplayApi.posterImg(firstAnime.animeId),
                     },
                 };
@@ -113,6 +114,7 @@ export async function tryMatchByTmdbId(itemInfoMap, apiConfigs, apiPriority) {
                     episodeTitle: matchedEp.episodeTitle,
                     animeId: matchedAnime.animeId,
                     animeTitle: matchedAnime.animeTitle,
+                    animeType: matchedAnime.type,
                     imageUrl: dandanplayApi.posterImg(matchedAnime.animeId),
                 },
             };

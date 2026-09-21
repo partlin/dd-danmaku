@@ -13,6 +13,7 @@ export class EDE {
         this.episode_info = null;
         this.ob = null;
         this.loading = false;
+        this.onlineDanmakuOk = false;
         this.danmuCache = {}; // 只包含 comment 未解析
         this.commentsParsed = []; // 包含 comment 和 extComment 解析后全量
         this.extCommentCache = {}; // 只包含 extComment 未解析

@@ -10,6 +10,7 @@ import {
     parseSearchKeyword,
     extractKeywords,
 } from './similarity.js';
+import { getSeasonMatchScore } from './season.js';
 
 /**
  * @param {string} animeName
@@ -79,12 +80,13 @@ export function selectBestMatch(searchTitle, candidates, prefix) {
     const scoredCandidates = candidates.map((candidate) => {
         const score = calculateMatchScore(parsedSearch.title, candidate);
 
-        if (parsedSearch.season && candidate.animeTitle) {
-            const candidateParsed = parseSearchKeyword(candidate.animeTitle);
-            if (candidateParsed.season === parsedSearch.season) {
-                score.total += 0.15;
-                console.log(`[智能匹配] 季度匹配加分: ${candidate.animeTitle}`);
-            }
+        const seasonScore = getSeasonMatchScore(searchTitle, candidate.animeTitle, candidate.type);
+        if (seasonScore < 0) {
+            score.total = -1;
+            console.log(`[智能匹配] 忽略季度冲突候选: ${candidate.animeTitle}`);
+        } else if (seasonScore > 1) {
+            score.total += 0.15;
+            console.log(`[智能匹配] 季度匹配加分: ${candidate.animeTitle}`);
         }
 
         if (parsedSearch.episode) {

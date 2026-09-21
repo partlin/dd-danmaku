@@ -70,13 +70,12 @@ export async function getMapByEmbyItemInfo() {
         } else {
             episodeName = seriesName + (seasonNumber && seasonNumber !== 1 ? ` ${seasonNumber}` : '');
         }
-        animeName = seriesName;
-        if (seasonNumber != 1) {
-            animeName += ' ' + seasonNumber;
-        }
+        // 统一使用带 SxxExx 的标题作为匹配上下文，确保季度硬约束可识别。
+        animeName = episodeName;
     } else {
         _id = item.Id;
         animeName = item.Name;
+        episodeName = item.Name;
         episode = 'movie';
     }
 
