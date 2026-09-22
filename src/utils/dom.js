@@ -42,7 +42,7 @@ export function getTargetInput(e) {
 
 /**
  * 等待目标元素出现
- * @param {string|object} target - 选择器字符串，或 { element: ele, needParent: true }
+ * @param {string|object|function} target - 选择器、{ element: ele, needParent: true }，或动态查找函数
  * @param {function} [callback] - 找到后的回调，参数为元素
  * @param {number} [timeout=10000] - 超时毫秒，0 表示不超时
  * @param {number} [interval=check_interval] - 检查间隔
@@ -60,7 +60,8 @@ export function waitForElement(
     let timeoutId = null;
     let settled = false;
     const isSelector = typeof target === 'string';
-    const elementMark = isSelector ? target : target.element?.tagName;
+    const isResolver = typeof target === 'function';
+    const elementMark = isSelector ? target : (isResolver ? 'resolver' : target.element?.tagName);
     const registry = destroyIntervalIds && Array.isArray(destroyIntervalIds)
         ? destroyIntervalIds
         : null;
@@ -85,6 +86,7 @@ export function waitForElement(
 
     function findElement() {
         if (isSelector) return document.querySelector(target);
+        if (isResolver) return target();
         if (!target?.element) return null;
         return target.needParent ? target.element.parentNode : target.element;
     }

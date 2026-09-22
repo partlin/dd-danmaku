@@ -581,6 +581,12 @@
             this.commentsParsed = []; // 包含 comment 和 extComment 解析后全量
             this.extCommentCache = {}; // 只包含 extComment 未解析
             this.destroyIntervalIds = [];
+            this.uiWaitHandles = new Map();
+            this.viewRoots = new Map();
+            this.pendingDestroyGenerations = [];
+            this.currentViewRoot = null;
+            this.viewGeneration = 0;
+            this.clockIntervalId = null;
             this.searchDanmakuOpts = {}; // 手动搜索变量
             this.appLogAspect = null; // 应用日志切面
             this.bangumiInfo = {};
@@ -679,8 +685,22 @@
         }
     }
 
+    /**
+     * playbackstart 可能晚于 viewshow 才给出实际单集 ID。
+     * 若播放会话发生变化，需要为新 generation 重新启动 UI 挂载等待。
+     */
+    function syncPlaybackViewSession(state, refreshUI = initUI) {
+        const itemId = state?.NowPlayingItem?.Id || state?.NowPlayingItem?.ItemId;
+        if (!window.ede || !itemId || window.ede.itemId === itemId) { return false; }
+        window.ede.viewGeneration = (window.ede.viewGeneration || 0) + 1;
+        window.ede.itemId = itemId;
+        refreshUI();
+        return true;
+    }
+
     function onPlaybackStart(e, state) {
-        console.log(e.type);
+        console.log(e?.type);
+        syncPlaybackViewSession(state);
         loadDanmaku(LOAD_TYPE.INIT);
     }
 
@@ -714,9 +734,56 @@
         }
     }
 
+    function getActiveViewRoot() {
+        const queryStr = mediaContainerQueryStr.includes(notHide)
+            ? mediaContainerQueryStr
+            : mediaContainerQueryStr + notHide;
+        const roots = Array.from(document.querySelectorAll?.(queryStr) || []);
+        const activeRoots = roots.filter(isViewRootActive);
+        return activeRoots.length ? activeRoots[activeRoots.length - 1] : null;
+    }
+
+    function isViewRootActive(viewRoot) {
+        if (!viewRoot || viewRoot.isConnected === false) { return false; }
+        if (viewRoot.classList?.contains('hide') || viewRoot.classList?.contains('page-hidden')) {
+            return false;
+        }
+        if (viewRoot.getAttribute?.('aria-hidden') === 'true') { return false; }
+        const style = typeof window.getComputedStyle === 'function'
+            ? window.getComputedStyle(viewRoot)
+            : null;
+        if (style?.display === 'none' || style?.visibility === 'hidden') { return false; }
+        if (typeof viewRoot.getClientRects === 'function' && viewRoot.getClientRects().length === 0) {
+            return false;
+        }
+        return true;
+    }
+
+    function isViewUiSessionCurrent(ede, viewGeneration, viewRoot) {
+        if (!ede || ede.viewGeneration !== viewGeneration || !viewRoot) { return false; }
+        return isViewRootActive(viewRoot);
+    }
+
+    function cleanupViewUI(ede, viewGeneration) {
+        if (!ede || viewGeneration == null) { return; }
+        ede.uiWaitHandles?.get(viewGeneration)?.cancel?.();
+        ede.uiWaitHandles?.delete(viewGeneration);
+        const viewRoot = ede.viewRoots?.get(viewGeneration);
+        const controls = viewRoot?.querySelectorAll?.(`#${eleIds.danmakuCtr}`) || [];
+        Array.from(controls).forEach(control => {
+            if (control.getAttribute('data-ede-view-generation') === String(viewGeneration)) {
+                control.remove();
+            }
+        });
+        ede.viewRoots?.delete(viewGeneration);
+        if (ede.viewGeneration === viewGeneration && ede.currentViewRoot === viewRoot) {
+            ede.currentViewRoot = null;
+        }
+    }
+
     function initUI() {
-        // 已初始化
-        if (getById(eleIds.danmakuCtr)) { return; }
+        const ede = window.ede;
+        const viewGeneration = ede?.viewGeneration;
         console.log('正在初始化UI');
 
         // ApiClient.isMinServerVersion("4.8.0.00"); 可以精确对比客户端指定版本小于当前版本,但此处暂时不需要
@@ -731,38 +798,59 @@
             mediaContainerQueryStr = 'div[data-type="video-osd"]';
             isVersionOld = true;
         }
-        if (!mediaContainerQueryStr.includes(notHide)) {
-            mediaContainerQueryStr += notHide;
-        }
-
         // 弹幕按钮父容器 div,延时判断,精确 dom query 时播放器 UI 小概率暂未渲染
-        const ctrlWrapperQueryStr = `${mediaContainerQueryStr} .videoOsdBottom-maincontrols`;
-        waitForElement(ctrlWrapperQueryStr, (wrapper) => {
-            const commonWrapper = getByClass(classes.videoOsdBottomButtons += notHide, wrapper);
-            if (commonWrapper) {
-                wrapper = commonWrapper;
-            } else {
-                // Emby 客户端启动时会检测鼠标设备,无鼠标时, commonWrapper 将会 hide
-                // 手动模拟无鼠标步骤为浏览器页签打开后不要动鼠标,仅使用键盘操作
-                wrapper = getByClass(classes.videoOsdBottomButtonsTopRight, wrapper);
-            }
-            // 在老客户端上存在右侧按钮,在右侧按钮前添加
-            const rightButtons = getByClass(classes.videoOsdBottomButtonsRight, wrapper);
-            const menubar = document.createElement('div');
-            menubar.id = eleIds.danmakuCtr;
-            if (!window.ede.episode_info) {
-                menubar.style.opacity = 0.5;
-            }
-            if (rightButtons) {
-                wrapper.insertBefore(menubar, rightButtons);
-            } else {
-                wrapper.append(menubar);
-            }
-            mediaBtnOpts.forEach(opt => {
-                menubar.appendChild(embyButton(opt, opt.onClick));
+        const waitHandle = waitForElement(
+            () => getActiveViewRoot()?.querySelector('.videoOsdBottom-maincontrols'),
+            (wrapper) => {
+                const viewRoot = getActiveViewRoot();
+                if (!isViewUiSessionCurrent(ede, viewGeneration, viewRoot) || !viewRoot.contains(wrapper)) {
+                    return;
+                }
+                ede.currentViewRoot = viewRoot;
+                ede.viewRoots.set(viewGeneration, viewRoot);
+                const existingCtr = getById(eleIds.danmakuCtr, viewRoot);
+                if (existingCtr) {
+                    existingCtr.setAttribute('data-ede-view-generation', String(viewGeneration));
+                    return;
+                }
+                const commonWrapper = getByClass(classes.videoOsdBottomButtons + notHide, wrapper);
+                if (commonWrapper) {
+                    wrapper = commonWrapper;
+                } else {
+                    // Emby 客户端启动时会检测鼠标设备,无鼠标时, commonWrapper 将会 hide
+                    // 手动模拟无鼠标步骤为浏览器页签打开后不要动鼠标,仅使用键盘操作
+                    wrapper = getByClass(classes.videoOsdBottomButtonsTopRight, wrapper);
+                }
+                if (!wrapper || !isViewUiSessionCurrent(ede, viewGeneration, viewRoot)) { return; }
+                // 在老客户端上存在右侧按钮,在右侧按钮前添加
+                const rightButtons = getByClass(classes.videoOsdBottomButtonsRight, wrapper);
+                const menubar = document.createElement('div');
+                menubar.id = eleIds.danmakuCtr;
+                menubar.setAttribute('data-ede-view-generation', String(viewGeneration));
+                if (!window.ede.episode_info) {
+                    menubar.style.opacity = 0.5;
+                }
+                if (rightButtons) {
+                    wrapper.insertBefore(menubar, rightButtons);
+                } else {
+                    wrapper.append(menubar);
+                }
+                mediaBtnOpts.forEach(opt => {
+                    menubar.appendChild(embyButton(opt, opt.onClick));
+                });
+                console.log('UI初始化完成');
+            },
+            0
+        );
+        if (ede && viewGeneration != null) {
+            ede.uiWaitHandles.get(viewGeneration)?.cancel?.();
+            ede.uiWaitHandles.set(viewGeneration, waitHandle);
+            waitHandle.finally(() => {
+                if (ede.uiWaitHandles.get(viewGeneration) === waitHandle) {
+                    ede.uiWaitHandles.delete(viewGeneration);
+                }
             });
-            console.log('UI初始化完成');
-        }, 0);
+        }
     }
 
     async function getEmbyItemInfo() {
@@ -5200,7 +5288,10 @@
     }
 
     function destroyAllInterval() {
-        window.ede.destroyIntervalIds.map(id => clearInterval(id));
+        [...window.ede.destroyIntervalIds].forEach(handle => {
+            if (typeof handle?.cancel === 'function') { handle.cancel(); }
+            else { clearInterval(handle); }
+        });
         window.ede.destroyIntervalIds = [];
     }
 
@@ -5216,44 +5307,74 @@
     function waitForElement(target, callback, timeout = 10000, interval = check_interval) {
         let intervalId = null;
         let timeoutId = null;
+        let settled = false;
         const isSelector = typeof target === 'string';
-        const elementMark = isSelector ? target : target.element.tagName;
+        const isResolver = typeof target === 'function';
+        const elementMark = isSelector ? target : (isResolver ? 'resolver' : target.element?.tagName);
+        const registry = window.ede?.destroyIntervalIds;
+        let resolvePromise;
+
+        const handle = {
+            cancel() {
+                if (settled) { return; }
+                settled = true;
+                clearInterval(intervalId);
+                clearTimeout(timeoutId);
+                removeHandle();
+                resolvePromise(null);
+            },
+        };
+
+        function removeHandle() {
+            if (!Array.isArray(registry)) { return; }
+            const index = registry.indexOf(handle);
+            if (index >= 0) { registry.splice(index, 1); }
+        }
+
+        function findElement() {
+            if (isSelector) { return document.querySelector(target); }
+            if (isResolver) { return target(); }
+            if (!target?.element) { return null; }
+            return target.needParent ? target.element.parentNode : target.element;
+        }
     
         const promise = new Promise((resolve, reject) => {
+            resolvePromise = resolve;
             function checkElement() {
-                console.log(`waitForElement: checking element[${elementMark}]`);
-                let element = null;
-                if (isSelector) {
-                    element = document.querySelector(target);
-                } else {
-                    if (target.needParent) {
-                        element = target.element.parentNode;
-                    } else {
-                        element = target.element;
-                    }
-                }
+                if (settled) { return; }
+                const element = findElement();
                 if (element) {
+                    settled = true;
                     clearInterval(intervalId);
                     clearTimeout(timeoutId);
-                    if (callback) {
-                        callback(element);
+                    removeHandle();
+                    try {
+                        if (callback) { callback(element); }
+                        resolve(element);
+                    } catch (error) {
+                        reject(error);
                     }
-                    resolve(element);
                 }
             }
     
+            if (Array.isArray(registry)) { registry.push(handle); }
+            checkElement();
+            if (settled) { return; }
             intervalId = setInterval(checkElement, interval);
-            window.ede.destroyIntervalIds.push(intervalId);
     
             if (timeout > 0) {
                 timeoutId = setTimeout(() => {
+                    if (settled) { return; }
+                    settled = true;
                     clearInterval(intervalId);
+                    removeHandle();
                     console.log(`waitForElement: unable to find element[${elementMark}], timeout: ${timeout}`);
                     reject(new Error(`Element [${elementMark}] not found within ${timeout}ms`));
                 }, timeout);
             }
         });
     
+        promise.cancel = handle.cancel;
         return promise;
     }
 
@@ -5317,7 +5438,10 @@
         if (headerClockEle) {
             headerClockEle.remove();
         }
-        destroyAllInterval();
+        if (window.ede?.clockIntervalId) {
+            clearInterval(window.ede.clockIntervalId);
+            window.ede.clockIntervalId = null;
+        }
     }
 
     function addHeaderClock() {
@@ -5328,6 +5452,10 @@
         }
         if (headerClockEle) {
             headerClockEle.remove();
+        }
+        if (window.ede?.clockIntervalId) {
+            clearInterval(window.ede.clockIntervalId);
+            window.ede.clockIntervalId = null;
         }
     
         const clockElement = document.createElement('div');
@@ -5345,8 +5473,7 @@
         }
         updateClock();
         const intervalId = setInterval(updateClock, 1000);
-    
-        window.ede.destroyIntervalIds.push(intervalId);
+        window.ede.clockIntervalId = intervalId;
         return intervalId;
     }
 
@@ -5444,17 +5571,18 @@
     }
 
     function beforeDestroy(e) {
-        if (e.detail.type !== 'video-osd') {
+        if (e?.detail?.type !== 'video-osd') {
             return;
         }
+        const endingGeneration = window.ede?.pendingDestroyGenerations?.shift()
+            ?? window.ede?.viewGeneration;
+        cleanupViewUI(window.ede, endingGeneration);
+        if (endingGeneration !== window.ede?.viewGeneration) { return; }
+        window.ede.viewGeneration += 1;
+        window.ede.itemId = '';
         // 此段销毁不重要,可有可无,仅是规范使用,清除弹幕,但未销毁 danmaku 实例
         if (window.ede.danmaku) {
             window.ede.danmaku.clear();
-        }
-        // 销毁弹幕按钮容器简单,双 mediaContainerQueryStr 下免去 DOM 位移操作
-        const danmakuCtr = getById(eleIds.danmakuCtr);
-        if (danmakuCtr) {
-            danmakuCtr.remove();
         }
         // const h5VideoAdapterEle = getById(eleIds.h5VideoAdapter);
         // if (h5VideoAdapterEle) {
@@ -5469,12 +5597,28 @@
     }
 
     function onViewShow(e) {
-        console.log(e.type, e);
+        console.log(e?.type, e);
         customeUrl.init();
         lsGetItem(lsKeys.quickDebugOn.id) && !getById(eleIds.danmakuSettingBtnDebug) && quickDebug();
         addEasterEggListener();
-        if (e.detail.type === 'video-osd') {
+        if (e?.detail?.type === 'video-osd') {
             if (!window.ede) { window.ede = new EDE(); }
+            const itemId = e?.detail?.params?.id || '';
+            const sameActiveView = Boolean(
+                itemId &&
+                window.ede.itemId === itemId &&
+                (
+                    (window.ede.currentViewRoot && getActiveViewRoot() === window.ede.currentViewRoot) ||
+                    window.ede.uiWaitHandles?.has(window.ede.viewGeneration)
+                )
+            );
+            if (!sameActiveView) {
+                if (window.ede.itemId && window.ede.viewGeneration > 0) {
+                    window.ede.pendingDestroyGenerations.push(window.ede.viewGeneration);
+                }
+                window.ede.viewGeneration += 1;
+                window.ede.itemId = itemId;
+            }
             if (!window.ede.appLogAspect && lsGetItem(lsKeys.consoleLogEnable.id)) {
                 window.ede.appLogAspect = new AppLogAspect().init();
             }
@@ -5484,7 +5628,6 @@
             initListener();
             initCss();
         }
-        window.ede.itemId = e.detail.params.id ? e.detail.params.id : '';
     }
 
     // 缓存纪元：只清理旧自动匹配缓存，保留用户设置和手动匹配记录。

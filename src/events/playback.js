@@ -10,6 +10,7 @@ import { embyToast } from '../ui/dialog.js';
 import { removeHeaderClock } from './video-osd.js';
 import { danmakuAutoFilterCancel } from '../danmaku/filter.js';
 import { syncPlaybackItemSession } from '../core/lifecycle.js';
+import { initUI } from '../ui/init.js';
 
 /**
  * 播放停止时按百分比处理（Bangumi 提交等）
@@ -45,11 +46,21 @@ export function onPlaybackStopPct(e, state) {
 }
 
 /**
+ * 播放器开始事件可能晚于 viewshow 才给出实际单集 ID。
+ * 若因此切换了播放会话，需要为新 generation 重新启动 UI 挂载等待。
+ */
+export function syncPlaybackViewSession(state, refreshUI = initUI) {
+    const changed = syncPlaybackItemSession(window.ede, state);
+    if (changed) refreshUI();
+    return changed;
+}
+
+/**
  * 播放开始
  */
 export function onPlaybackStart(e, state) {
     console.log(e?.type);
-    syncPlaybackItemSession(window.ede, state);
+    syncPlaybackViewSession(state);
     loadDanmaku(LOAD_TYPE.INIT);
 }
 

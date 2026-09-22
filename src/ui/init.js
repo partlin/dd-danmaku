@@ -48,6 +48,35 @@ function isOldEmbyServer() {
     return (parts[0] || 0) < 4 || ((parts[0] || 0) === 4 && (parts[1] || 0) < 8);
 }
 
+export function getActiveViewRoot() {
+    const queryStr =
+        mediaContainerQueryStr + (mediaContainerQueryStr.includes(notHide) ? '' : notHide);
+    const roots = Array.from(document.querySelectorAll?.(queryStr) || []);
+    const activeRoots = roots.filter(isViewRootActive);
+    return activeRoots.length ? activeRoots[activeRoots.length - 1] : null;
+}
+
+/**
+ * Emby SPA 会暂留带 page-hidden 的旧 OSD；不能只排除 hide。
+ */
+export function isViewRootActive(viewRoot) {
+    if (!viewRoot || viewRoot.isConnected === false) return false;
+    if (viewRoot.classList?.contains('hide') || viewRoot.classList?.contains('page-hidden')) {
+        return false;
+    }
+    if (viewRoot.getAttribute?.('aria-hidden') === 'true') return false;
+
+    const getComputedStyleFn = globalThis.window?.getComputedStyle || globalThis.getComputedStyle;
+    if (typeof getComputedStyleFn === 'function') {
+        const style = getComputedStyleFn(viewRoot);
+        if (style?.display === 'none' || style?.visibility === 'hidden') return false;
+    }
+    if (typeof viewRoot.getClientRects === 'function' && viewRoot.getClientRects().length === 0) {
+        return false;
+    }
+    return true;
+}
+
 function doDanmakuSwitch() {
     const flag = !lsGetItem(lsKeys.switch.id);
     lsSetItem(lsKeys.switch.id, flag);
@@ -69,7 +98,8 @@ function doDanmakuSwitch() {
  * 初始化播放页弹幕按钮等 UI
  */
 export function initUI() {
-    if (getById(eleIds.danmakuCtr)) return;
+    const ede = window.ede;
+    const viewGeneration = ede?.viewGeneration;
     console.log('正在初始化UI');
 
     if (isOldEmbyServer()) {
@@ -77,21 +107,32 @@ export function initUI() {
         setVersionOld(true);
     }
 
-    const queryStr =
-        mediaContainerQueryStr + (mediaContainerQueryStr.includes(notHide) ? '' : notHide);
-    const ctrlWrapperQueryStr = `${queryStr} .videoOsdBottom-maincontrols`;
-    waitForElement(
-        ctrlWrapperQueryStr,
+    const waitHandle = waitForElement(
+        () => getActiveViewRoot()?.querySelector('.videoOsdBottom-maincontrols'),
         (wrapper) => {
+            const viewRoot = getActiveViewRoot();
+            if (!isViewUiSessionCurrent(ede, viewGeneration, viewRoot) || !viewRoot.contains(wrapper)) {
+                return;
+            }
+            ede.currentViewRoot = viewRoot;
+            ede.viewRoots.set(viewGeneration, viewRoot);
+
+            const existingCtr = getById(eleIds.danmakuCtr, viewRoot);
+            if (existingCtr) {
+                existingCtr.setAttribute('data-ede-view-generation', String(viewGeneration));
+                return;
+            }
             let commonWrapper = getByClass(classes.videoOsdBottomButtons + notHide, wrapper);
             if (commonWrapper) {
                 wrapper = commonWrapper;
             } else {
                 wrapper = getByClass(classes.videoOsdBottomButtonsTopRight, wrapper);
             }
+            if (!wrapper || !isViewUiSessionCurrent(ede, viewGeneration, viewRoot)) return;
             const rightButtons = getByClass(classes.videoOsdBottomButtonsRight, wrapper);
             const menubar = document.createElement('div');
             menubar.id = eleIds.danmakuCtr;
+            menubar.setAttribute('data-ede-view-generation', String(viewGeneration));
             if (!window.ede?.episode_info) {
                 menubar.style.opacity = '0.5';
             }
@@ -109,6 +150,45 @@ export function initUI() {
         check_interval,
         window.ede?.destroyIntervalIds
     );
+    if (ede && viewGeneration != null) {
+        const previous = ede.uiWaitHandles.get(viewGeneration);
+        previous?.cancel?.();
+        ede.uiWaitHandles.set(viewGeneration, waitHandle);
+        waitHandle.finally(() => {
+            if (ede.uiWaitHandles.get(viewGeneration) === waitHandle) {
+                ede.uiWaitHandles.delete(viewGeneration);
+            }
+        });
+    }
+}
+
+/**
+ * 当前播放页会话是否仍可以操作指定 OSD。
+ */
+export function isViewUiSessionCurrent(ede, viewGeneration, viewRoot) {
+    if (!ede || ede.viewGeneration !== viewGeneration || !viewRoot) return false;
+    return isViewRootActive(viewRoot);
+}
+
+/**
+ * 只清理指定播放页会话的 UI，避免延迟的 viewbeforehide 误删新页面按钮。
+ */
+export function cleanupViewUI(ede, viewGeneration) {
+    if (!ede || viewGeneration == null) return;
+    ede.uiWaitHandles?.get(viewGeneration)?.cancel?.();
+    ede.uiWaitHandles?.delete(viewGeneration);
+
+    const viewRoot = ede.viewRoots?.get(viewGeneration);
+    const controls = viewRoot?.querySelectorAll?.(`#${eleIds.danmakuCtr}`) || [];
+    Array.from(controls).forEach((control) => {
+        if (control.getAttribute('data-ede-view-generation') === String(viewGeneration)) {
+            control.remove();
+        }
+    });
+    ede.viewRoots?.delete(viewGeneration);
+    if (ede.viewGeneration === viewGeneration && ede.currentViewRoot === viewRoot) {
+        ede.currentViewRoot = null;
+    }
 }
 
 /**

@@ -18,6 +18,10 @@ export class EDE {
         this.commentsParsed = []; // 包含 comment 和 extComment 解析后全量
         this.extCommentCache = {}; // 只包含 extComment 未解析
         this.destroyIntervalIds = [];
+        this.uiWaitHandles = new Map();
+        this.viewRoots = new Map();
+        this.pendingDestroyGenerations = [];
+        this.currentViewRoot = null;
         this.viewGeneration = 0;
         this.loadGeneration = 0;
         this.activeLoadSession = null;

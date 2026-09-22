@@ -13,7 +13,7 @@ import {
     startViewSession,
     clearPlaybackBindings,
 } from '../core/index.js';
-import { initUI, initListener, initCss } from '../ui/init.js';
+import { initUI, initListener, initCss, cleanupViewUI, getActiveViewRoot } from '../ui/init.js';
 import { customeUrl } from '../config/custome-url.js';
 import { addEasterEggListener, quickDebug } from './easter-egg.js';
 import { onPlaybackStart, onPlaybackStop } from './playback.js';
@@ -33,6 +33,13 @@ import { initH5VideoAdapter, videoTimeUpdateInterval } from './h5-video-adapter.
  */
 export function beforeDestroy(e) {
     if (e?.detail?.type !== 'video-osd') return;
+
+    const endingGeneration = window.ede?.pendingDestroyGenerations?.shift()
+        ?? window.ede?.viewGeneration;
+    cleanupViewUI(window.ede, endingGeneration);
+    // Emby 可能在新播放页 viewshow 之后才补发旧页 viewbeforehide。
+    // 此时只清理旧会话 UI，不得销毁新会话的弹幕和监听器。
+    if (endingGeneration !== window.ede?.viewGeneration) return;
 
     if (window.ede) startViewSession(window.ede, '');
     if (window.ede?.danmaku) {
@@ -70,7 +77,21 @@ export function onViewShow(e) {
 
     if (e?.detail?.type === 'video-osd') {
         if (!window.ede) window.ede = new EDE();
-        startViewSession(window.ede, e?.detail?.params?.id || '');
+        const itemId = e?.detail?.params?.id || '';
+        const sameActiveView = Boolean(
+            itemId &&
+            window.ede.itemId === itemId &&
+            (
+                (window.ede.currentViewRoot && getActiveViewRoot() === window.ede.currentViewRoot) ||
+                window.ede.uiWaitHandles?.has(window.ede.viewGeneration)
+            )
+        );
+        if (!sameActiveView) {
+            if (window.ede.itemId && window.ede.viewGeneration > 0) {
+                window.ede.pendingDestroyGenerations.push(window.ede.viewGeneration);
+            }
+            startViewSession(window.ede, itemId);
+        }
     }
 
     if (lsGetItem(lsKeys.quickDebugOn.id) && !getById(eleIds.danmakuSettingBtnDebug)) {

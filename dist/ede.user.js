@@ -401,7 +401,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
 
   /**
    * 等待目标元素出现
-   * @param {string|object} target - 选择器字符串，或 { element: ele, needParent: true }
+   * @param {string|object|function} target - 选择器、{ element: ele, needParent: true }，或动态查找函数
    * @param {function} [callback] - 找到后的回调，参数为元素
    * @param {number} [timeout=10000] - 超时毫秒，0 表示不超时
    * @param {number} [interval=check_interval] - 检查间隔
@@ -417,7 +417,8 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var timeoutId = null;
     var settled = false;
     var isSelector = typeof target === 'string';
-    var elementMark = isSelector ? target : (_target$element = target.element) === null || _target$element === void 0 ? void 0 : _target$element.tagName;
+    var isResolver = typeof target === 'function';
+    var elementMark = isSelector ? target : isResolver ? 'resolver' : (_target$element = target.element) === null || _target$element === void 0 ? void 0 : _target$element.tagName;
     var registry = destroyIntervalIds && Array.isArray(destroyIntervalIds) ? destroyIntervalIds : null;
     var resolvePromise;
     var handle = {
@@ -437,6 +438,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     }
     function findElement() {
       if (isSelector) return document.querySelector(target);
+      if (isResolver) return target();
       if (!(target !== null && target !== void 0 && target.element)) return null;
       return target.needParent ? target.element.parentNode : target.element;
     }
@@ -1355,6 +1357,10 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     this.commentsParsed = []; // 包含 comment 和 extComment 解析后全量
     this.extCommentCache = {}; // 只包含 extComment 未解析
     this.destroyIntervalIds = [];
+    this.uiWaitHandles = new Map();
+    this.viewRoots = new Map();
+    this.pendingDestroyGenerations = [];
+    this.currentViewRoot = null;
     this.viewGeneration = 0;
     this.loadGeneration = 0;
     this.activeLoadSession = null;
@@ -6802,6 +6808,34 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     });
     return (parts[0] || 0) < 4 || (parts[0] || 0) === 4 && (parts[1] || 0) < 8;
   }
+  function getActiveViewRoot() {
+    var _document$querySelect, _document;
+    var queryStr = mediaContainerQueryStr + (mediaContainerQueryStr.includes(notHide) ? '' : notHide);
+    var roots = Array.from(((_document$querySelect = (_document = document).querySelectorAll) === null || _document$querySelect === void 0 ? void 0 : _document$querySelect.call(_document, queryStr)) || []);
+    var activeRoots = roots.filter(isViewRootActive);
+    return activeRoots.length ? activeRoots[activeRoots.length - 1] : null;
+  }
+
+  /**
+   * Emby SPA 会暂留带 page-hidden 的旧 OSD；不能只排除 hide。
+   */
+  function isViewRootActive(viewRoot) {
+    var _viewRoot$classList, _viewRoot$classList2, _viewRoot$getAttribut, _globalThis$window;
+    if (!viewRoot || viewRoot.isConnected === false) return false;
+    if ((_viewRoot$classList = viewRoot.classList) !== null && _viewRoot$classList !== void 0 && _viewRoot$classList.contains('hide') || (_viewRoot$classList2 = viewRoot.classList) !== null && _viewRoot$classList2 !== void 0 && _viewRoot$classList2.contains('page-hidden')) {
+      return false;
+    }
+    if (((_viewRoot$getAttribut = viewRoot.getAttribute) === null || _viewRoot$getAttribut === void 0 ? void 0 : _viewRoot$getAttribut.call(viewRoot, 'aria-hidden')) === 'true') return false;
+    var getComputedStyleFn = ((_globalThis$window = globalThis.window) === null || _globalThis$window === void 0 ? void 0 : _globalThis$window.getComputedStyle) || globalThis.getComputedStyle;
+    if (typeof getComputedStyleFn === 'function') {
+      var style = getComputedStyleFn(viewRoot);
+      if ((style === null || style === void 0 ? void 0 : style.display) === 'none' || (style === null || style === void 0 ? void 0 : style.visibility) === 'hidden') return false;
+    }
+    if (typeof viewRoot.getClientRects === 'function' && viewRoot.getClientRects().length === 0) {
+      return false;
+    }
+    return true;
+  }
   function doDanmakuSwitch() {
     var _window$ede;
     var flag = !lsGetItem(lsKeys.switch.id);
@@ -6825,25 +6859,40 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    */
   function initUI() {
     var _window$ede3;
-    if (getById(eleIds.danmakuCtr)) return;
+    var ede = window.ede;
+    var viewGeneration = ede === null || ede === void 0 ? void 0 : ede.viewGeneration;
     console.log('正在初始化UI');
     if (isOldEmbyServer()) {
       setMediaContainerQueryStr('div[data-type="video-osd"]');
       setVersionOld(true);
     }
-    var queryStr = mediaContainerQueryStr + (mediaContainerQueryStr.includes(notHide) ? '' : notHide);
-    var ctrlWrapperQueryStr = "".concat(queryStr, " .videoOsdBottom-maincontrols");
-    waitForElement(ctrlWrapperQueryStr, function (wrapper) {
+    var waitHandle = waitForElement(function () {
+      var _getActiveViewRoot;
+      return (_getActiveViewRoot = getActiveViewRoot()) === null || _getActiveViewRoot === void 0 ? void 0 : _getActiveViewRoot.querySelector('.videoOsdBottom-maincontrols');
+    }, function (wrapper) {
       var _window$ede2;
+      var viewRoot = getActiveViewRoot();
+      if (!isViewUiSessionCurrent(ede, viewGeneration, viewRoot) || !viewRoot.contains(wrapper)) {
+        return;
+      }
+      ede.currentViewRoot = viewRoot;
+      ede.viewRoots.set(viewGeneration, viewRoot);
+      var existingCtr = getById(eleIds.danmakuCtr, viewRoot);
+      if (existingCtr) {
+        existingCtr.setAttribute('data-ede-view-generation', String(viewGeneration));
+        return;
+      }
       var commonWrapper = getByClass(classes.videoOsdBottomButtons + notHide, wrapper);
       if (commonWrapper) {
         wrapper = commonWrapper;
       } else {
         wrapper = getByClass(classes.videoOsdBottomButtonsTopRight, wrapper);
       }
+      if (!wrapper || !isViewUiSessionCurrent(ede, viewGeneration, viewRoot)) return;
       var rightButtons = getByClass(classes.videoOsdBottomButtonsRight, wrapper);
       var menubar = document.createElement('div');
       menubar.id = eleIds.danmakuCtr;
+      menubar.setAttribute('data-ede-view-generation', String(viewGeneration));
       if (!((_window$ede2 = window.ede) !== null && _window$ede2 !== void 0 && _window$ede2.episode_info)) {
         menubar.style.opacity = '0.5';
       }
@@ -6857,6 +6906,46 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       });
       console.log('UI初始化完成');
     }, 0, check_interval, (_window$ede3 = window.ede) === null || _window$ede3 === void 0 ? void 0 : _window$ede3.destroyIntervalIds);
+    if (ede && viewGeneration != null) {
+      var _previous$cancel;
+      var previous = ede.uiWaitHandles.get(viewGeneration);
+      previous === null || previous === void 0 || (_previous$cancel = previous.cancel) === null || _previous$cancel === void 0 || _previous$cancel.call(previous);
+      ede.uiWaitHandles.set(viewGeneration, waitHandle);
+      waitHandle.finally(function () {
+        if (ede.uiWaitHandles.get(viewGeneration) === waitHandle) {
+          ede.uiWaitHandles.delete(viewGeneration);
+        }
+      });
+    }
+  }
+
+  /**
+   * 当前播放页会话是否仍可以操作指定 OSD。
+   */
+  function isViewUiSessionCurrent(ede, viewGeneration, viewRoot) {
+    if (!ede || ede.viewGeneration !== viewGeneration || !viewRoot) return false;
+    return isViewRootActive(viewRoot);
+  }
+
+  /**
+   * 只清理指定播放页会话的 UI，避免延迟的 viewbeforehide 误删新页面按钮。
+   */
+  function cleanupViewUI(ede, viewGeneration) {
+    var _ede$uiWaitHandles, _ede$uiWaitHandles$ca, _ede$uiWaitHandles2, _ede$viewRoots, _viewRoot$querySelect, _ede$viewRoots2;
+    if (!ede || viewGeneration == null) return;
+    (_ede$uiWaitHandles = ede.uiWaitHandles) === null || _ede$uiWaitHandles === void 0 || (_ede$uiWaitHandles = _ede$uiWaitHandles.get(viewGeneration)) === null || _ede$uiWaitHandles === void 0 || (_ede$uiWaitHandles$ca = _ede$uiWaitHandles.cancel) === null || _ede$uiWaitHandles$ca === void 0 || _ede$uiWaitHandles$ca.call(_ede$uiWaitHandles);
+    (_ede$uiWaitHandles2 = ede.uiWaitHandles) === null || _ede$uiWaitHandles2 === void 0 || _ede$uiWaitHandles2.delete(viewGeneration);
+    var viewRoot = (_ede$viewRoots = ede.viewRoots) === null || _ede$viewRoots === void 0 ? void 0 : _ede$viewRoots.get(viewGeneration);
+    var controls = (viewRoot === null || viewRoot === void 0 || (_viewRoot$querySelect = viewRoot.querySelectorAll) === null || _viewRoot$querySelect === void 0 ? void 0 : _viewRoot$querySelect.call(viewRoot, "#".concat(eleIds.danmakuCtr))) || [];
+    Array.from(controls).forEach(function (control) {
+      if (control.getAttribute('data-ede-view-generation') === String(viewGeneration)) {
+        control.remove();
+      }
+    });
+    (_ede$viewRoots2 = ede.viewRoots) === null || _ede$viewRoots2 === void 0 || _ede$viewRoots2.delete(viewGeneration);
+    if (ede.viewGeneration === viewGeneration && ede.currentViewRoot === viewRoot) {
+      ede.currentViewRoot = null;
+    }
   }
 
   /**
@@ -7026,11 +7115,22 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
   }
 
   /**
+   * 播放器开始事件可能晚于 viewshow 才给出实际单集 ID。
+   * 若因此切换了播放会话，需要为新 generation 重新启动 UI 挂载等待。
+   */
+  function syncPlaybackViewSession(state) {
+    var refreshUI = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : initUI;
+    var changed = syncPlaybackItemSession(window.ede, state);
+    if (changed) refreshUI();
+    return changed;
+  }
+
+  /**
    * 播放开始
    */
   function onPlaybackStart(e, state) {
     console.log(e === null || e === void 0 ? void 0 : e.type);
-    syncPlaybackItemSession(window.ede, state);
+    syncPlaybackViewSession(state);
     loadDanmaku(LOAD_TYPE.INIT);
   }
 
@@ -7145,19 +7245,24 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * 退出播放页时清理
    */
   function beforeDestroy(e) {
-    var _e$detail, _window$ede, _window$ede2, _window$ede3;
+    var _e$detail, _window$ede$pendingDe, _window$ede, _window$ede2, _window$ede3, _window$ede4, _window$ede5, _window$ede6;
     if ((e === null || e === void 0 || (_e$detail = e.detail) === null || _e$detail === void 0 ? void 0 : _e$detail.type) !== 'video-osd') return;
+    var endingGeneration = (_window$ede$pendingDe = (_window$ede = window.ede) === null || _window$ede === void 0 || (_window$ede = _window$ede.pendingDestroyGenerations) === null || _window$ede === void 0 ? void 0 : _window$ede.shift()) !== null && _window$ede$pendingDe !== void 0 ? _window$ede$pendingDe : (_window$ede2 = window.ede) === null || _window$ede2 === void 0 ? void 0 : _window$ede2.viewGeneration;
+    cleanupViewUI(window.ede, endingGeneration);
+    // Emby 可能在新播放页 viewshow 之后才补发旧页 viewbeforehide。
+    // 此时只清理旧会话 UI，不得销毁新会话的弹幕和监听器。
+    if (endingGeneration !== ((_window$ede3 = window.ede) === null || _window$ede3 === void 0 ? void 0 : _window$ede3.viewGeneration)) return;
     if (window.ede) startViewSession(window.ede, '');
-    if ((_window$ede = window.ede) !== null && _window$ede !== void 0 && _window$ede.danmaku) {
+    if ((_window$ede4 = window.ede) !== null && _window$ede4 !== void 0 && _window$ede4.danmaku) {
       var _window$ede$danmaku$d, _window$ede$danmaku;
       (_window$ede$danmaku$d = (_window$ede$danmaku = window.ede.danmaku).destroy) === null || _window$ede$danmaku$d === void 0 || _window$ede$danmaku$d.call(_window$ede$danmaku);
       window.ede.danmaku = null;
     }
-    if ((_window$ede2 = window.ede) !== null && _window$ede2 !== void 0 && _window$ede2.ob) {
+    if ((_window$ede5 = window.ede) !== null && _window$ede5 !== void 0 && _window$ede5.ob) {
       window.ede.ob.disconnect();
       window.ede.ob = null;
     }
-    if ((_window$ede3 = window.ede) !== null && _window$ede3 !== void 0 && _window$ede3.listeningMedia) {
+    if ((_window$ede6 = window.ede) !== null && _window$ede6 !== void 0 && _window$ede6.listeningMedia) {
       window.ede.listeningMedia.removeAttribute('ede_listening');
       window.ede.listeningMedia = null;
     }
@@ -7182,9 +7287,16 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     console.log(e === null || e === void 0 ? void 0 : e.type, e);
     customeUrl.init();
     if ((e === null || e === void 0 || (_e$detail2 = e.detail) === null || _e$detail2 === void 0 ? void 0 : _e$detail2.type) === 'video-osd') {
-      var _e$detail3;
+      var _e$detail3, _window$ede$uiWaitHan;
       if (!window.ede) window.ede = new EDE();
-      startViewSession(window.ede, (e === null || e === void 0 || (_e$detail3 = e.detail) === null || _e$detail3 === void 0 || (_e$detail3 = _e$detail3.params) === null || _e$detail3 === void 0 ? void 0 : _e$detail3.id) || '');
+      var itemId = (e === null || e === void 0 || (_e$detail3 = e.detail) === null || _e$detail3 === void 0 || (_e$detail3 = _e$detail3.params) === null || _e$detail3 === void 0 ? void 0 : _e$detail3.id) || '';
+      var sameActiveView = Boolean(itemId && window.ede.itemId === itemId && (window.ede.currentViewRoot && getActiveViewRoot() === window.ede.currentViewRoot || ((_window$ede$uiWaitHan = window.ede.uiWaitHandles) === null || _window$ede$uiWaitHan === void 0 ? void 0 : _window$ede$uiWaitHan.has(window.ede.viewGeneration))));
+      if (!sameActiveView) {
+        if (window.ede.itemId && window.ede.viewGeneration > 0) {
+          window.ede.pendingDestroyGenerations.push(window.ede.viewGeneration);
+        }
+        startViewSession(window.ede, itemId);
+      }
     }
     if (lsGetItem(lsKeys.quickDebugOn.id) && !getById(eleIds.danmakuSettingBtnDebug)) {
       quickDebug();
