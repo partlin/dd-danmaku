@@ -665,7 +665,7 @@
     }
 
     function initListener() {
-        const _media = getActiveMedia() || document.getElementById(eleIds.h5VideoAdapter);
+        const _media = getPlaybackMedia();
         // 页面未加载
         if (!_media) {
             window.ede.episode_info && (window.ede.episode_info = null);
@@ -758,6 +758,12 @@
             return !parentContainer || isViewRootActive(parentContainer);
         });
         return visibleMedia.length ? visibleMedia[visibleMedia.length - 1] : null;
+    }
+
+    // 优先使用当前活动播放页的真实 video；原生播放器没有真实 video 时，
+    // 允许隐藏的虚拟 video 作为弹幕时间源。
+    function getPlaybackMedia() {
+        return getActiveMedia() || document.getElementById(eleIds.h5VideoAdapter);
     }
 
     function isViewRootActive(viewRoot) {
@@ -2414,8 +2420,7 @@
             stableChecks += 1;
             return stableChecks >= 10 ? container : null;
         }, null, 0, 100);
-        const _media = getActiveMedia()
-            || document.getElementById(eleIds.h5VideoAdapter);
+        const _media = getPlaybackMedia();
         if (!_media) { throw new Error('当前播放页不存在 video 标签'); }
         if (!isVersionOld) { _media.style.position = 'absolute'; }
         let wrapper = getById(eleIds.danmakuWrapper, _container);
@@ -2455,11 +2460,8 @@
         // 自定义的 initH5VideoAdapter 下,解决暂停时暂停的弹幕再次加载会自动恢复问题
         if (_media.id) {
             require(['playbackManager'], (playbackManager) => {
-                if (playbackManager.getCurrentPlayer()
-                    && playbackManager.getPlayerState().PlayState.IsPaused
-                ) {
-                    _media.dispatchEvent(new Event('pause'));
-                }
+                if (!playbackManager.getCurrentPlayer()) { return; }
+                syncVirtualMediaPlaybackState(_media, playbackManager.getPlayerState());
             });
         }
         // 设置弹窗内的弹幕信息
@@ -2526,7 +2528,7 @@
     }
 
     async function loadDanmaku(loadType = LOAD_TYPE.CHECK) {
-        const _media = getActiveMedia();
+        const _media = getPlaybackMedia();
         if (!_media) {
             console.warn('用户已退出视频播放,停止加载弹幕');
             return false;
@@ -5525,7 +5527,7 @@
     }
 
     async function initH5VideoAdapter() {
-        let _media = getActiveMedia() || document.getElementById(eleIds.h5VideoAdapter);
+        let _media = getPlaybackMedia();
         if (_media) {
             if (_media.id) { // 若是手动创建的<video>
                 videoTimeUpdateInterval(_media, true);
@@ -5541,8 +5543,7 @@
         _media.classList.add('htmlvideoplayer', 'moveUpSubtitles');
         document.body.prepend(_media);
 
-        _media.play();
-        videoTimeUpdateInterval(_media, true);
+        startVirtualMediaPlayback(_media);
 
         // 以下暂未遇到匿名函数导致的事件重复,等出现时再匿名转命名函数
         require(['playbackManager'], (playbackManager) => {
@@ -5569,13 +5570,11 @@
         playbackEventsRefresh({
             'pause': (e) => {
                 console.warn(e.type);
-                _media.dispatchEvent(new Event('pause'));
-                videoTimeUpdateInterval(_media, false);
+                syncVirtualMediaPlaybackState(_media, { PlayState: { IsPaused: true } });
             },
             'unpause': (e) => {
                 console.warn(e.type);
-                _media.dispatchEvent(new Event('play'));
-                videoTimeUpdateInterval(_media, true);
+                syncVirtualMediaPlaybackState(_media, { PlayState: { IsPaused: false } });
             },
         });
         console.log('已创建虚拟 video 标签,适配器处理正确结束');
@@ -5651,6 +5650,29 @@
             initListener();
             initCss();
         }
+    }
+
+    // 旧版 Electron 的无媒体 video 可能让 play() Promise 一直 pending；
+    // 不能等待它，否则时间同步和播放器事件绑定都不会执行。
+    function startVirtualMediaPlayback(media) {
+        if (!media) { return; }
+        try {
+            const playResult = media.play();
+            playResult?.catch?.((error) => {
+                console.warn('虚拟 video 自动播放被拒绝，将继续同步播放器事件:', error);
+            });
+        } catch (error) {
+            console.warn('虚拟 video 自动播放被拒绝，将继续同步播放器事件:', error);
+        }
+        videoTimeUpdateInterval(media, true);
+    }
+
+    function syncVirtualMediaPlaybackState(media, playerState) {
+        if (!media || media.id !== eleIds.h5VideoAdapter) { return; }
+        const isPaused = playerState?.PlayState?.IsPaused;
+        if (typeof isPaused !== 'boolean') { return; }
+        media.dispatchEvent(new Event(isPaused ? 'pause' : 'play'));
+        videoTimeUpdateInterval(media, !isPaused);
     }
 
     // 缓存纪元：只清理旧自动匹配缓存，保留用户设置和手动匹配记录。

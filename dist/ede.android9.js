@@ -401,6 +401,18 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
   }
 
   /**
+   * 返回当前播放使用的媒体元素。
+   * 优先选择活动播放页中的真实 video；原生播放器没有真实 video 时，
+   * 允许使用明确指定的隐藏虚拟 video 作为时间源。
+   */
+  function getPlaybackMedia(containerQuery, mediaQuery, fallbackId) {
+    var _document$getElementB, _document3;
+    var activeMedia = getActiveMedia(containerQuery, mediaQuery);
+    if (activeMedia) return activeMedia;
+    return fallbackId ? ((_document$getElementB = (_document3 = document).getElementById) === null || _document$getElementB === void 0 ? void 0 : _document$getElementB.call(_document3, fallbackId)) || null : null;
+  }
+
+  /**
    * 按 ID 获取元素
    * @param {string} childId - 元素 ID（不带 #）
    * @param {Document|Element} [parentNode=document] - 父节点
@@ -4284,6 +4296,131 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
   }
 
   /**
+   * 平滑补充 <video> timeupdate 中秒级间隔缺失的 100ms 间隙
+   * @param {HTMLVideoElement|null} media - video 元素，null 时自动查询
+   * @param {boolean} enable - 是否启用
+   */
+  function videoTimeUpdateInterval(media, enable) {
+    var _media = media || document.querySelector(mediaQueryStr);
+    if (!_media) return;
+    if (enable && !_media.timeupdateIntervalId) {
+      _media.timeupdateIntervalId = setInterval(function () {
+        _media.currentTime += 100 / 1e3;
+      }, 100);
+    } else if (!enable && _media.timeupdateIntervalId) {
+      clearInterval(_media.timeupdateIntervalId);
+      _media.timeupdateIntervalId = null;
+    }
+  }
+
+  /**
+   * 启动虚拟 video 的时间轴，但不等待 play() Promise。
+   * 旧版 Electron 的无媒体 video 会让该 Promise 一直 pending，直到页面退出时
+   * 被 pause() 打断；等待它会导致后续时间同步和播放器事件绑定永远不执行。
+   */
+  function startVirtualMediaPlayback(media) {
+    if (!media) return;
+    try {
+      var _playResult$catch;
+      var playResult = media.play();
+      playResult === null || playResult === void 0 || (_playResult$catch = playResult.catch) === null || _playResult$catch === void 0 || _playResult$catch.call(playResult, function (error) {
+        console.warn('虚拟 video 自动播放被拒绝，将继续同步播放器事件:', error);
+      });
+    } catch (error) {
+      console.warn('虚拟 video 自动播放被拒绝，将继续同步播放器事件:', error);
+    }
+    videoTimeUpdateInterval(media, true);
+  }
+
+  /**
+   * 将 libmpv 的真实播放状态同步给弹幕引擎监听的虚拟 video。
+   */
+  function syncVirtualMediaPlaybackState(media, playerState) {
+    var _playerState$PlayStat;
+    if (!media || media.id !== eleIds.h5VideoAdapter) return;
+    var isPaused = playerState === null || playerState === void 0 || (_playerState$PlayStat = playerState.PlayState) === null || _playerState$PlayStat === void 0 ? void 0 : _playerState$PlayStat.IsPaused;
+    if (typeof isPaused !== 'boolean') return;
+    media.dispatchEvent(new Event(isPaused ? 'pause' : 'play'));
+    videoTimeUpdateInterval(media, !isPaused);
+  }
+
+  /**
+   * 当播放页没有 <video> 时，创建虚拟 video 并同步 Native 播放器状态
+   */
+  async function initH5VideoAdapter() {
+    var ede = window.ede;
+    var viewGeneration = ede === null || ede === void 0 ? void 0 : ede.viewGeneration;
+    var isCurrentView = function isCurrentView() {
+      return ede && window.ede === ede && ede.viewGeneration === viewGeneration;
+    };
+    var _media = getPlaybackMedia(mediaContainerQueryStr, mediaQueryStr, eleIds.h5VideoAdapter);
+    if (_media && _media.id !== eleIds.h5VideoAdapter) return;
+    if (!_media) {
+      console.log('播放页不存在 video 标签,适配器处理开始');
+      _media = document.createElement('video');
+      if (OS.isApple()) {
+        _media.src = '';
+      }
+      _media.style.display = 'none';
+      _media.id = eleIds.h5VideoAdapter;
+      _media.classList.add('htmlvideoplayer', 'moveUpSubtitles');
+      document.body.prepend(_media);
+    }
+    startVirtualMediaPlayback(_media);
+    if (!isCurrentView()) {
+      videoTimeUpdateInterval(_media, false);
+      _media.remove();
+      return;
+    }
+    if (typeof require !== 'function') {
+      console.warn('initH5VideoAdapter: require 不可用，跳过 playbackManager 同步');
+      return;
+    }
+    var _await$require = await require(['playbackManager']),
+      _await$require2 = _slicedToArray(_await$require, 1),
+      playbackManager = _await$require2[0];
+    if (!isCurrentView()) {
+      videoTimeUpdateInterval(_media, false);
+      _media.remove();
+      return;
+    }
+    await playbackEventsRefresh({
+      timeupdate: function timeupdate() {
+        var _playbackManager$getP;
+        var realCurrentTime = playbackManager.currentTime(playbackManager.getCurrentPlayer()) / 1e7;
+        var mediaTime = _media.currentTime;
+        _media.currentTime = realCurrentTime;
+        var embyPlaybackRate = (_playbackManager$getP = playbackManager.getPlayerState) === null || _playbackManager$getP === void 0 || (_playbackManager$getP = _playbackManager$getP.call(playbackManager)) === null || _playbackManager$getP === void 0 || (_playbackManager$getP = _playbackManager$getP.PlayState) === null || _playbackManager$getP === void 0 ? void 0 : _playbackManager$getP.PlaybackRate;
+        _media.playbackRate = embyPlaybackRate || 1;
+        if (Math.abs(mediaTime - realCurrentTime) > 2) {
+          _media.dispatchEvent(new Event('seeking'));
+          console.warn('seeking', realCurrentTime, mediaTime);
+        }
+        if (lsGetItem(lsKeys.debugH5VideoAdapterEnable.id)) {
+          console.warn("".concat(eleIds.h5VideoAdapter, ", currentTime: ").concat(_media.currentTime, ", playbackRate: ").concat(_media.playbackRate));
+        }
+      },
+      pause: function pause() {
+        console.warn('pause');
+        syncVirtualMediaPlaybackState(_media, {
+          PlayState: {
+            IsPaused: true
+          }
+        });
+      },
+      unpause: function unpause() {
+        console.warn('unpause');
+        syncVirtualMediaPlaybackState(_media, {
+          PlayState: {
+            IsPaused: false
+          }
+        });
+      }
+    });
+    console.log('已创建虚拟 video 标签,适配器处理正确结束');
+  }
+
+  /**
    * 创建并初始化弹幕实例
    * @param {object[]} comments - 原始弹幕数据
    * @param {object} [hooks] - 可选回调 { buildCurrentDanmakuInfo, appendvideoOsdDanmakuInfo }
@@ -4326,7 +4463,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     if (session) assertLoadSession(window.ede, session);
 
     // Emby 新版过渡时会将实际 video 移到 body；DOM 工具会排除隐藏旧 OSD。
-    var _media = getActiveMedia(mediaContainerQueryStr, mediaQueryStr) || document.getElementById(eleIds.h5VideoAdapter);
+    var _media = getPlaybackMedia(mediaContainerQueryStr, mediaQueryStr, eleIds.h5VideoAdapter);
     if (!_media) throw new Error('当前播放页不存在 video 标签');
     if (!isVersionOld) _media.style.position = 'absolute';
     var wrapper = getById(eleIds.danmakuWrapper, _container);
@@ -4364,9 +4501,8 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       if (typeof require === 'function') {
         require(['playbackManager'], function (playbackManager) {
           var _playbackManager$getP;
-          if (playbackManager !== null && playbackManager !== void 0 && playbackManager.getCurrentPlayer() && (_playbackManager$getP = playbackManager.getPlayerState()) !== null && _playbackManager$getP !== void 0 && (_playbackManager$getP = _playbackManager$getP.PlayState) !== null && _playbackManager$getP !== void 0 && _playbackManager$getP.IsPaused) {
-            _media.dispatchEvent(new Event('pause'));
-          }
+          if (!(playbackManager !== null && playbackManager !== void 0 && playbackManager.getCurrentPlayer())) return;
+          syncVirtualMediaPlaybackState(_media, (_playbackManager$getP = playbackManager.getPlayerState) === null || _playbackManager$getP === void 0 ? void 0 : _playbackManager$getP.call(playbackManager));
         });
       }
     }
@@ -4430,7 +4566,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var _window$ede2;
     var loadType = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : LOAD_TYPE.CHECK;
     var hooks = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
-    var _media = getActiveMedia(mediaContainerQueryStr, mediaQueryStr);
+    var _media = getPlaybackMedia(mediaContainerQueryStr, mediaQueryStr, eleIds.h5VideoAdapter);
     if (!_media) {
       console.warn('用户已退出视频播放,停止加载弹幕');
       return false;
@@ -6983,7 +7119,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
   function initListener() {
     var _OS$isAndroidEmbyNois, _OS$isEmbyUWP;
     var handlers = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
-    var _media = getActiveMedia(mediaContainerQueryStr, mediaQueryStr) || document.getElementById(eleIds.h5VideoAdapter);
+    var _media = getPlaybackMedia(mediaContainerQueryStr, mediaQueryStr, eleIds.h5VideoAdapter);
     if (!_media) {
       var _window$ede4;
       if ((_window$ede4 = window.ede) !== null && _window$ede4 !== void 0 && _window$ede4.episode_info) window.ede.episode_info = null;
@@ -7172,97 +7308,6 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       removeHeaderClock();
     }
     danmakuAutoFilterCancel();
-  }
-
-  /**
-   * 平滑补充 <video> timeupdate 中秒级间隔缺失的 100ms 间隙
-   * @param {HTMLVideoElement|null} media - video 元素，null 时自动查询
-   * @param {boolean} enable - 是否启用
-   */
-  function videoTimeUpdateInterval(media, enable) {
-    var _media = media || document.querySelector(mediaQueryStr);
-    if (!_media) return;
-    if (enable && !_media.timeupdateIntervalId) {
-      _media.timeupdateIntervalId = setInterval(function () {
-        _media.currentTime += 100 / 1e3;
-      }, 100);
-    } else if (!enable && _media.timeupdateIntervalId) {
-      clearInterval(_media.timeupdateIntervalId);
-      _media.timeupdateIntervalId = null;
-    }
-  }
-
-  /**
-   * 当播放页没有 <video> 时，创建虚拟 video 并同步 Native 播放器状态
-   */
-  async function initH5VideoAdapter() {
-    var ede = window.ede;
-    var viewGeneration = ede === null || ede === void 0 ? void 0 : ede.viewGeneration;
-    var isCurrentView = function isCurrentView() {
-      return ede && window.ede === ede && ede.viewGeneration === viewGeneration;
-    };
-    var _media = getActiveMedia(mediaContainerQueryStr, mediaQueryStr) || document.getElementById(eleIds.h5VideoAdapter);
-    if (_media && _media.id !== eleIds.h5VideoAdapter) return;
-    if (!_media) {
-      console.log('播放页不存在 video 标签,适配器处理开始');
-      _media = document.createElement('video');
-      if (OS.isApple()) {
-        _media.src = '';
-      }
-      _media.style.display = 'none';
-      _media.id = eleIds.h5VideoAdapter;
-      _media.classList.add('htmlvideoplayer', 'moveUpSubtitles');
-      document.body.prepend(_media);
-    }
-    await Promise.resolve(_media.play()).catch(function (error) {
-      console.warn('虚拟 video 自动播放被拒绝，将继续同步播放器事件:', error);
-    });
-    if (!isCurrentView()) {
-      videoTimeUpdateInterval(_media, false);
-      _media.remove();
-      return;
-    }
-    videoTimeUpdateInterval(_media, true);
-    if (typeof require !== 'function') {
-      console.warn('initH5VideoAdapter: require 不可用，跳过 playbackManager 同步');
-      return;
-    }
-    var _await$require = await require(['playbackManager']),
-      _await$require2 = _slicedToArray(_await$require, 1),
-      playbackManager = _await$require2[0];
-    if (!isCurrentView()) {
-      videoTimeUpdateInterval(_media, false);
-      _media.remove();
-      return;
-    }
-    await playbackEventsRefresh({
-      timeupdate: function timeupdate() {
-        var _playbackManager$getP;
-        var realCurrentTime = playbackManager.currentTime(playbackManager.getCurrentPlayer()) / 1e7;
-        var mediaTime = _media.currentTime;
-        _media.currentTime = realCurrentTime;
-        var embyPlaybackRate = (_playbackManager$getP = playbackManager.getPlayerState) === null || _playbackManager$getP === void 0 || (_playbackManager$getP = _playbackManager$getP.call(playbackManager)) === null || _playbackManager$getP === void 0 || (_playbackManager$getP = _playbackManager$getP.PlayState) === null || _playbackManager$getP === void 0 ? void 0 : _playbackManager$getP.PlaybackRate;
-        _media.playbackRate = embyPlaybackRate || 1;
-        if (Math.abs(mediaTime - realCurrentTime) > 2) {
-          _media.dispatchEvent(new Event('seeking'));
-          console.warn('seeking', realCurrentTime, mediaTime);
-        }
-        if (lsGetItem(lsKeys.debugH5VideoAdapterEnable.id)) {
-          console.warn("".concat(eleIds.h5VideoAdapter, ", currentTime: ").concat(_media.currentTime, ", playbackRate: ").concat(_media.playbackRate));
-        }
-      },
-      pause: function pause() {
-        console.warn('pause');
-        _media.dispatchEvent(new Event('pause'));
-        videoTimeUpdateInterval(_media, false);
-      },
-      unpause: function unpause() {
-        console.warn('unpause');
-        _media.dispatchEvent(new Event('play'));
-        videoTimeUpdateInterval(_media, true);
-      }
-    });
-    console.log('已创建虚拟 video 标签,适配器处理正确结束');
   }
 
   /**

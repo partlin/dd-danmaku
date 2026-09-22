@@ -10,13 +10,14 @@ import { mediaContainerQueryStr, mediaQueryStr } from '../config/constants.js';
 import { lsGetItem, lsKeys } from '../config/api.js';
 import { eleIds } from '../config/ele-ids.js';
 import { currentDanmakuInfoContainerId } from '../config/options.js';
-import { getActiveMedia, getActiveMediaContainer, getById, waitForElement } from '../utils/dom.js';
+import { getActiveMediaContainer, getPlaybackMedia, getById, waitForElement } from '../utils/dom.js';
 import { danmakuParser } from './parser.js';
 import { danmakuFilter } from './filter.js';
 import { buildProgressBarChart } from './chart.js';
 import { getEpisodeInfo } from '../match/get-episode-info.js';
 import { fetchComment, fetchExtcommentActual } from '../match/search.js';
 import { aggregateExtComments } from './aggregate.js';
+import { syncVirtualMediaPlaybackState } from '../events/h5-video-adapter.js';
 import {
     beginLoadSession,
     assertLoadSession,
@@ -77,8 +78,11 @@ export async function createDanmaku(comments, hooks = {}) {
     if (session) assertLoadSession(window.ede, session);
 
     // Emby 新版过渡时会将实际 video 移到 body；DOM 工具会排除隐藏旧 OSD。
-    const _media = getActiveMedia(mediaContainerQueryStr, mediaQueryStr)
-        || document.getElementById(eleIds.h5VideoAdapter);
+    const _media = getPlaybackMedia(
+        mediaContainerQueryStr,
+        mediaQueryStr,
+        eleIds.h5VideoAdapter
+    );
     if (!_media) throw new Error('当前播放页不存在 video 标签');
     if (!isVersionOld) _media.style.position = 'absolute';
 
@@ -129,12 +133,8 @@ export async function createDanmaku(comments, hooks = {}) {
     if (_media.id) {
         if (typeof require === 'function') {
             require(['playbackManager'], (playbackManager) => {
-                if (
-                    playbackManager?.getCurrentPlayer() &&
-                    playbackManager.getPlayerState()?.PlayState?.IsPaused
-                ) {
-                    _media.dispatchEvent(new Event('pause'));
-                }
+                if (!playbackManager?.getCurrentPlayer()) return;
+                syncVirtualMediaPlaybackState(_media, playbackManager.getPlayerState?.());
             });
         }
     }
@@ -185,7 +185,11 @@ export async function getCommentsByPluginApi(mediaServerItemId, signal) {
  * @param {object} [hooks] - { buildCurrentDanmakuInfo }
  */
 export async function loadDanmaku(loadType = LOAD_TYPE.CHECK, hooks = {}) {
-    const _media = getActiveMedia(mediaContainerQueryStr, mediaQueryStr);
+    const _media = getPlaybackMedia(
+        mediaContainerQueryStr,
+        mediaQueryStr,
+        eleIds.h5VideoAdapter
+    );
     if (!_media) {
         console.warn('用户已退出视频播放,停止加载弹幕');
         return false;

@@ -6,7 +6,7 @@
 import { getById, getByClass } from './components/common.js';
 import { embyButton } from './components/index.js';
 import { createDialog } from './dialog.js';
-import { getActiveMedia, getActiveMediaContainer, isElementVisible, waitForElement } from '../utils/dom.js';
+import { getActiveMediaContainer, getPlaybackMedia, isElementVisible, waitForElement } from '../utils/dom.js';
 import { eleIds } from '../config/ele-ids.js';
 import { lsKeys, lsGetItem } from '../config/api.js';
 import { lsSetItem } from '../core/storage.js';
@@ -178,8 +178,11 @@ export function cleanupViewUI(ede, viewGeneration) {
  * @param {object} [handlers] - { onPlaybackStart, onPlaybackStop, onVideoOsdShow, onVideoOsdHide, playbackEventsRefresh, refreshEventListener, loadDanmaku }
  */
 export function initListener(handlers = {}) {
-    const _media = getActiveMedia(mediaContainerQueryStr, mediaQueryStr)
-        || document.getElementById(eleIds.h5VideoAdapter);
+    const _media = getPlaybackMedia(
+        mediaContainerQueryStr,
+        mediaQueryStr,
+        eleIds.h5VideoAdapter
+    );
     if (!_media) {
         if (window.ede?.episode_info) window.ede.episode_info = null;
         return;

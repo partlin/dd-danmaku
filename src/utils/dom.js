@@ -55,6 +55,17 @@ export function getActiveMedia(containerQuery, mediaQuery) {
 }
 
 /**
+ * 返回当前播放使用的媒体元素。
+ * 优先选择活动播放页中的真实 video；原生播放器没有真实 video 时，
+ * 允许使用明确指定的隐藏虚拟 video 作为时间源。
+ */
+export function getPlaybackMedia(containerQuery, mediaQuery, fallbackId) {
+    const activeMedia = getActiveMedia(containerQuery, mediaQuery);
+    if (activeMedia) return activeMedia;
+    return fallbackId ? document.getElementById?.(fallbackId) || null : null;
+}
+
+/**
  * 按 ID 获取元素
  * @param {string} childId - 元素 ID（不带 #）
  * @param {Document|Element} [parentNode=document] - 父节点

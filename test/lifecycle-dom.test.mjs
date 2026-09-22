@@ -7,7 +7,12 @@ import {
     startViewSession,
     syncPlaybackItemSession,
 } from '../src/core/lifecycle.js';
-import { getActiveMedia, getActiveMediaContainer, waitForElement } from '../src/utils/dom.js';
+import {
+    getActiveMedia,
+    getActiveMediaContainer,
+    getPlaybackMedia,
+    waitForElement,
+} from '../src/utils/dom.js';
 import {
     cleanupViewUI,
     getActiveViewRoot,
@@ -16,6 +21,11 @@ import {
     isViewUiSessionCurrent,
 } from '../src/ui/init.js';
 import { syncPlaybackViewSession } from '../src/events/playback.js';
+import {
+    startVirtualMediaPlayback,
+    syncVirtualMediaPlaybackState,
+    videoTimeUpdateInterval,
+} from '../src/events/h5-video-adapter.js';
 
 function fakeElement() {
     return {
@@ -239,6 +249,83 @@ test('Emby 将 video 重挂到 body 时仍使用可见 video 和稳定活动 OSD
 
     assert.equal(getActiveMediaContainer('.graphicContentContainer'), activeRoot);
     assert.equal(getActiveMedia('.graphicContentContainer', 'video'), reparentedVideo);
+});
+
+test('Emby Theater 无真实 video 时使用隐藏的虚拟 video', (t) => {
+    const previousDocument = globalThis.document;
+    const activeRoot = fakeElement();
+    const virtualVideo = fakeElement();
+    virtualVideo.id = 'h5VideoAdapter';
+    virtualVideo.style.display = 'none';
+    globalThis.document = {
+        querySelectorAll: (selector) => selector === '.graphicContentContainer'
+            ? [activeRoot]
+            : [],
+        getElementById: (id) => id === 'h5VideoAdapter' ? virtualVideo : null,
+    };
+    t.after(() => { globalThis.document = previousDocument; });
+
+    assert.equal(getActiveMedia('.graphicContentContainer', 'video'), null);
+    assert.equal(
+        getPlaybackMedia('.graphicContentContainer', 'video', 'h5VideoAdapter'),
+        virtualVideo
+    );
+});
+
+test('真实 video 优先于虚拟适配器且两者都不存在时返回 null', (t) => {
+    const previousDocument = globalThis.document;
+    const activeRoot = fakeElement();
+    const activeVideo = fakeElement();
+    const virtualVideo = fakeElement();
+    activeRoot.querySelector = (selector) => selector === 'video' ? activeVideo : null;
+    globalThis.document = {
+        querySelectorAll: (selector) => selector === '.graphicContentContainer'
+            ? [activeRoot]
+            : [],
+        getElementById: (id) => id === 'h5VideoAdapter' ? virtualVideo : null,
+    };
+    t.after(() => { globalThis.document = previousDocument; });
+
+    assert.equal(
+        getPlaybackMedia('.graphicContentContainer', 'video', 'h5VideoAdapter'),
+        activeVideo
+    );
+
+    activeRoot.querySelector = () => null;
+    globalThis.document.getElementById = () => null;
+    assert.equal(
+        getPlaybackMedia('.graphicContentContainer', 'video', 'h5VideoAdapter'),
+        null
+    );
+});
+
+test('虚拟 video 的 play Promise 挂起时仍立即启动时间同步', () => {
+    const media = {
+        currentTime: 0,
+        play: () => new Promise(() => {}),
+    };
+
+    startVirtualMediaPlayback(media);
+    assert.ok(media.timeupdateIntervalId);
+    videoTimeUpdateInterval(media, false);
+    assert.equal(media.timeupdateIntervalId, null);
+});
+
+test('libmpv 播放状态会驱动虚拟 video 的 play 和 pause 事件', () => {
+    const events = [];
+    const media = {
+        id: 'h5VideoAdapter',
+        currentTime: 0,
+        dispatchEvent: (event) => events.push(event.type),
+    };
+
+    syncVirtualMediaPlaybackState(media, { PlayState: { IsPaused: false } });
+    assert.deepEqual(events, ['play']);
+    assert.ok(media.timeupdateIntervalId);
+
+    syncVirtualMediaPlaybackState(media, { PlayState: { IsPaused: true } });
+    assert.deepEqual(events, ['play', 'pause']);
+    assert.equal(media.timeupdateIntervalId, null);
 });
 
 test('过期 UI 会话不可操作新 OSD，旧页清理不误删新按钮', () => {

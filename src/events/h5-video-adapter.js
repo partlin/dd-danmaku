@@ -9,7 +9,7 @@ import { eleIds } from '../config/ele-ids.js';
 import { lsKeys, lsGetItem } from '../config/api.js';
 import { OS } from '../utils/platform.js';
 import { playbackEventsRefresh } from './emby-events.js';
-import { getActiveMedia } from '../utils/dom.js';
+import { getPlaybackMedia } from '../utils/dom.js';
 
 /**
  * 平滑补充 <video> timeupdate 中秒级间隔缺失的 100ms 间隙
@@ -30,6 +30,35 @@ export function videoTimeUpdateInterval(media, enable) {
 }
 
 /**
+ * 启动虚拟 video 的时间轴，但不等待 play() Promise。
+ * 旧版 Electron 的无媒体 video 会让该 Promise 一直 pending，直到页面退出时
+ * 被 pause() 打断；等待它会导致后续时间同步和播放器事件绑定永远不执行。
+ */
+export function startVirtualMediaPlayback(media) {
+    if (!media) return;
+    try {
+        const playResult = media.play();
+        playResult?.catch?.((error) => {
+            console.warn('虚拟 video 自动播放被拒绝，将继续同步播放器事件:', error);
+        });
+    } catch (error) {
+        console.warn('虚拟 video 自动播放被拒绝，将继续同步播放器事件:', error);
+    }
+    videoTimeUpdateInterval(media, true);
+}
+
+/**
+ * 将 libmpv 的真实播放状态同步给弹幕引擎监听的虚拟 video。
+ */
+export function syncVirtualMediaPlaybackState(media, playerState) {
+    if (!media || media.id !== eleIds.h5VideoAdapter) return;
+    const isPaused = playerState?.PlayState?.IsPaused;
+    if (typeof isPaused !== 'boolean') return;
+    media.dispatchEvent(new Event(isPaused ? 'pause' : 'play'));
+    videoTimeUpdateInterval(media, !isPaused);
+}
+
+/**
  * 当播放页没有 <video> 时，创建虚拟 video 并同步 Native 播放器状态
  */
 export async function initH5VideoAdapter() {
@@ -37,8 +66,11 @@ export async function initH5VideoAdapter() {
     const viewGeneration = ede?.viewGeneration;
     const isCurrentView = () =>
         ede && window.ede === ede && ede.viewGeneration === viewGeneration;
-    let _media = getActiveMedia(mediaContainerQueryStr, mediaQueryStr)
-        || document.getElementById(eleIds.h5VideoAdapter);
+    let _media = getPlaybackMedia(
+        mediaContainerQueryStr,
+        mediaQueryStr,
+        eleIds.h5VideoAdapter
+    );
     if (_media && _media.id !== eleIds.h5VideoAdapter) return;
 
     if (!_media) {
@@ -53,15 +85,12 @@ export async function initH5VideoAdapter() {
         document.body.prepend(_media);
     }
 
-    await Promise.resolve(_media.play()).catch((error) => {
-        console.warn('虚拟 video 自动播放被拒绝，将继续同步播放器事件:', error);
-    });
+    startVirtualMediaPlayback(_media);
     if (!isCurrentView()) {
         videoTimeUpdateInterval(_media, false);
         _media.remove();
         return;
     }
-    videoTimeUpdateInterval(_media, true);
 
     if (typeof require !== 'function') {
         console.warn('initH5VideoAdapter: require 不可用，跳过 playbackManager 同步');
@@ -94,13 +123,11 @@ export async function initH5VideoAdapter() {
         },
         pause: () => {
             console.warn('pause');
-            _media.dispatchEvent(new Event('pause'));
-            videoTimeUpdateInterval(_media, false);
+            syncVirtualMediaPlaybackState(_media, { PlayState: { IsPaused: true } });
         },
         unpause: () => {
             console.warn('unpause');
-            _media.dispatchEvent(new Event('play'));
-            videoTimeUpdateInterval(_media, true);
+            syncVirtualMediaPlaybackState(_media, { PlayState: { IsPaused: false } });
         },
     });
 
