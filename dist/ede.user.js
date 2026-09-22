@@ -363,6 +363,58 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    */
 
   /**
+   * Emby 的 SPA 切页会短暂保留隐藏的旧播放页，DOM 查询必须排除它。
+   */
+  function isElementVisible(element) {
+    var _element$classList, _element$classList2, _element$getAttribute, _globalThis$window;
+    if (!element || element.isConnected === false) return false;
+    if ((_element$classList = element.classList) !== null && _element$classList !== void 0 && _element$classList.contains('hide') || (_element$classList2 = element.classList) !== null && _element$classList2 !== void 0 && _element$classList2.contains('page-hidden')) {
+      return false;
+    }
+    if (((_element$getAttribute = element.getAttribute) === null || _element$getAttribute === void 0 ? void 0 : _element$getAttribute.call(element, 'aria-hidden')) === 'true') return false;
+    var getComputedStyleFn = ((_globalThis$window = globalThis.window) === null || _globalThis$window === void 0 ? void 0 : _globalThis$window.getComputedStyle) || globalThis.getComputedStyle;
+    if (typeof getComputedStyleFn === 'function') {
+      var style = getComputedStyleFn(element);
+      if ((style === null || style === void 0 ? void 0 : style.display) === 'none' || (style === null || style === void 0 ? void 0 : style.visibility) === 'hidden') return false;
+    }
+    if (typeof element.getClientRects === 'function' && element.getClientRects().length === 0) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * 返回当前可见播放页的媒体容器，避免误命中 SPA 暂留的旧 OSD。
+   */
+  function getActiveMediaContainer(containerQuery) {
+    var _document$querySelect, _document;
+    var containers = Array.from(((_document$querySelect = (_document = document).querySelectorAll) === null || _document$querySelect === void 0 ? void 0 : _document$querySelect.call(_document, containerQuery)) || []);
+    var activeContainers = containers.filter(isElementVisible);
+    return activeContainers.length ? activeContainers[activeContainers.length - 1] : null;
+  }
+
+  /**
+   * 仅在当前可见播放页内查找 video，不能退回到全局旧 video。
+   */
+  function getActiveMedia(containerQuery, mediaQuery) {
+    var _container$querySelec, _document$querySelect2, _document2;
+    var container = getActiveMediaContainer(containerQuery);
+    var containedMedia = container === null || container === void 0 || (_container$querySelec = container.querySelector) === null || _container$querySelec === void 0 ? void 0 : _container$querySelec.call(container, mediaQuery);
+    if (containedMedia) return containedMedia;
+
+    // Emby 4.10 会在 OSD 过渡期间把实际 video 暂时移到 body。
+    // 此时不能因为 video 不在 OSD 子树中就回退到隐藏旧页的 video。
+    var mediaList = Array.from(((_document$querySelect2 = (_document2 = document).querySelectorAll) === null || _document$querySelect2 === void 0 ? void 0 : _document$querySelect2.call(_document2, mediaQuery)) || []);
+    var visibleMedia = mediaList.filter(function (media) {
+      var _media$closest;
+      if (!isElementVisible(media)) return false;
+      var parentContainer = (_media$closest = media.closest) === null || _media$closest === void 0 ? void 0 : _media$closest.call(media, containerQuery);
+      return !parentContainer || isElementVisible(parentContainer);
+    });
+    return visibleMedia.length ? visibleMedia[visibleMedia.length - 1] : null;
+  }
+
+  /**
    * 按 ID 获取元素
    * @param {string} childId - 元素 ID（不带 #）
    * @param {Document|Element} [parentNode=document] - 父节点
@@ -4268,26 +4320,34 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     window.ede.commentsParsed = commentsParsed;
     var _comments = danmakuFilter(commentsParsed);
     console.log('[加载]弹幕成功: ' + _comments.length);
-    var _media = document.querySelector(mediaQueryStr);
-    if (!_media) {
-      if (!window.ede.danmaku) {
-        window.ede.danmaku = {
-          comments: _comments
-        };
-      }
-      buildCurrentDanmakuInfo(currentDanmakuInfoContainerId);
-      throw new Error('用户已退出视频播放');
-    }
-    if (!isVersionOld) _media.style.position = 'absolute';
     var wrapperTop = 0;
-    var wrapper = getById(eleIds.danmakuWrapper);
+    var candidateContainer = null;
+    var stableChecks = 0;
+    var _container = await waitForElement(function () {
+      var container = getActiveMediaContainer(mediaContainerQueryStr);
+      if (!container) return null;
+
+      // playbackstart 早于 Emby OSD 的根节点切换。连续一秒取到同一
+      // 可见根节点后再创建 canvas，避免它随后变成 page-hidden 而缩成 0x0。
+      if (container !== candidateContainer) {
+        candidateContainer = container;
+        stableChecks = 0;
+      }
+      stableChecks += 1;
+      return stableChecks >= 10 ? container : null;
+    }, null, 0, 100, (_window$ede = window.ede) === null || _window$ede === void 0 ? void 0 : _window$ede.destroyIntervalIds);
+    if (!_container) throw new DOMException('Danmaku container wait cancelled', 'AbortError');
+    if (session) assertLoadSession(window.ede, session);
+
+    // Emby 新版过渡时会将实际 video 移到 body；DOM 工具会排除隐藏旧 OSD。
+    var _media = getActiveMedia(mediaContainerQueryStr, mediaQueryStr) || document.getElementById(eleIds.h5VideoAdapter);
+    if (!_media) throw new Error('当前播放页不存在 video 标签');
+    if (!isVersionOld) _media.style.position = 'absolute';
+    var wrapper = getById(eleIds.danmakuWrapper, _container);
     if (wrapper) wrapper.remove();
     wrapper = document.createElement('div');
     wrapper.id = eleIds.danmakuWrapper;
     wrapper.style.cssText = "\n        position: fixed;\n        width: 100%;\n        height: calc(".concat(lsGetItem(lsKeys.heightPercent.id), "% - ").concat(wrapperTop, "px);\n        background-color: ").concat(lsGetItem(lsKeys.debugShowDanmakuWrapper.id) ? 'rgba(115, 160, 255, 0.3)' : '', ";\n        top: ").concat(wrapperTop, "px;\n        pointer-events: none;\n    ");
-    var _container = await waitForElement(mediaContainerQueryStr, null, 0, 100, (_window$ede = window.ede) === null || _window$ede === void 0 ? void 0 : _window$ede.destroyIntervalIds);
-    if (!_container) throw new DOMException('Danmaku container wait cancelled', 'AbortError');
-    if (session) assertLoadSession(window.ede, session);
     _container.prepend(wrapper);
     var _speed = 144 * lsGetItem(lsKeys.speed.id);
     var DanmakuClass = window.Danmaku;
@@ -4384,7 +4444,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var _window$ede2;
     var loadType = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : LOAD_TYPE.CHECK;
     var hooks = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
-    var _media = document.querySelector(mediaQueryStr);
+    var _media = getActiveMedia(mediaContainerQueryStr, mediaQueryStr);
     if (!_media) {
       console.warn('用户已退出视频播放,停止加载弹幕');
       return false;
@@ -6809,32 +6869,14 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     return (parts[0] || 0) < 4 || (parts[0] || 0) === 4 && (parts[1] || 0) < 8;
   }
   function getActiveViewRoot() {
-    var _document$querySelect, _document;
-    var queryStr = mediaContainerQueryStr + (mediaContainerQueryStr.includes(notHide) ? '' : notHide);
-    var roots = Array.from(((_document$querySelect = (_document = document).querySelectorAll) === null || _document$querySelect === void 0 ? void 0 : _document$querySelect.call(_document, queryStr)) || []);
-    var activeRoots = roots.filter(isViewRootActive);
-    return activeRoots.length ? activeRoots[activeRoots.length - 1] : null;
+    return getActiveMediaContainer(mediaContainerQueryStr);
   }
 
   /**
    * Emby SPA 会暂留带 page-hidden 的旧 OSD；不能只排除 hide。
    */
   function isViewRootActive(viewRoot) {
-    var _viewRoot$classList, _viewRoot$classList2, _viewRoot$getAttribut, _globalThis$window;
-    if (!viewRoot || viewRoot.isConnected === false) return false;
-    if ((_viewRoot$classList = viewRoot.classList) !== null && _viewRoot$classList !== void 0 && _viewRoot$classList.contains('hide') || (_viewRoot$classList2 = viewRoot.classList) !== null && _viewRoot$classList2 !== void 0 && _viewRoot$classList2.contains('page-hidden')) {
-      return false;
-    }
-    if (((_viewRoot$getAttribut = viewRoot.getAttribute) === null || _viewRoot$getAttribut === void 0 ? void 0 : _viewRoot$getAttribut.call(viewRoot, 'aria-hidden')) === 'true') return false;
-    var getComputedStyleFn = ((_globalThis$window = globalThis.window) === null || _globalThis$window === void 0 ? void 0 : _globalThis$window.getComputedStyle) || globalThis.getComputedStyle;
-    if (typeof getComputedStyleFn === 'function') {
-      var style = getComputedStyleFn(viewRoot);
-      if ((style === null || style === void 0 ? void 0 : style.display) === 'none' || (style === null || style === void 0 ? void 0 : style.visibility) === 'hidden') return false;
-    }
-    if (typeof viewRoot.getClientRects === 'function' && viewRoot.getClientRects().length === 0) {
-      return false;
-    }
-    return true;
+    return isElementVisible(viewRoot);
   }
   function doDanmakuSwitch() {
     var _window$ede;
@@ -6955,7 +6997,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
   function initListener() {
     var _OS$isAndroidEmbyNois, _OS$isEmbyUWP;
     var handlers = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
-    var _media = document.querySelector(mediaQueryStr);
+    var _media = getActiveMedia(mediaContainerQueryStr, mediaQueryStr) || document.getElementById(eleIds.h5VideoAdapter);
     if (!_media) {
       var _window$ede4;
       if ((_window$ede4 = window.ede) !== null && _window$ede4 !== void 0 && _window$ede4.episode_info) window.ede.episode_info = null;
@@ -7173,7 +7215,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var isCurrentView = function isCurrentView() {
       return ede && window.ede === ede && ede.viewGeneration === viewGeneration;
     };
-    var _media = document.querySelector(mediaQueryStr);
+    var _media = getActiveMedia(mediaContainerQueryStr, mediaQueryStr) || document.getElementById(eleIds.h5VideoAdapter);
     if (_media && _media.id !== eleIds.h5VideoAdapter) return;
     if (!_media) {
       console.log('播放页不存在 video 标签,适配器处理开始');

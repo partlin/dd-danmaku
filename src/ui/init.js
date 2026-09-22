@@ -6,7 +6,7 @@
 import { getById, getByClass } from './components/common.js';
 import { embyButton } from './components/index.js';
 import { createDialog } from './dialog.js';
-import { waitForElement } from '../utils/dom.js';
+import { getActiveMedia, getActiveMediaContainer, isElementVisible, waitForElement } from '../utils/dom.js';
 import { eleIds } from '../config/ele-ids.js';
 import { lsKeys, lsGetItem } from '../config/api.js';
 import { lsSetItem } from '../core/storage.js';
@@ -49,32 +49,14 @@ function isOldEmbyServer() {
 }
 
 export function getActiveViewRoot() {
-    const queryStr =
-        mediaContainerQueryStr + (mediaContainerQueryStr.includes(notHide) ? '' : notHide);
-    const roots = Array.from(document.querySelectorAll?.(queryStr) || []);
-    const activeRoots = roots.filter(isViewRootActive);
-    return activeRoots.length ? activeRoots[activeRoots.length - 1] : null;
+    return getActiveMediaContainer(mediaContainerQueryStr);
 }
 
 /**
  * Emby SPA 会暂留带 page-hidden 的旧 OSD；不能只排除 hide。
  */
 export function isViewRootActive(viewRoot) {
-    if (!viewRoot || viewRoot.isConnected === false) return false;
-    if (viewRoot.classList?.contains('hide') || viewRoot.classList?.contains('page-hidden')) {
-        return false;
-    }
-    if (viewRoot.getAttribute?.('aria-hidden') === 'true') return false;
-
-    const getComputedStyleFn = globalThis.window?.getComputedStyle || globalThis.getComputedStyle;
-    if (typeof getComputedStyleFn === 'function') {
-        const style = getComputedStyleFn(viewRoot);
-        if (style?.display === 'none' || style?.visibility === 'hidden') return false;
-    }
-    if (typeof viewRoot.getClientRects === 'function' && viewRoot.getClientRects().length === 0) {
-        return false;
-    }
-    return true;
+    return isElementVisible(viewRoot);
 }
 
 function doDanmakuSwitch() {
@@ -196,7 +178,8 @@ export function cleanupViewUI(ede, viewGeneration) {
  * @param {object} [handlers] - { onPlaybackStart, onPlaybackStop, onVideoOsdShow, onVideoOsdHide, playbackEventsRefresh, refreshEventListener, loadDanmaku }
  */
 export function initListener(handlers = {}) {
-    const _media = document.querySelector(mediaQueryStr);
+    const _media = getActiveMedia(mediaContainerQueryStr, mediaQueryStr)
+        || document.getElementById(eleIds.h5VideoAdapter);
     if (!_media) {
         if (window.ede?.episode_info) window.ede.episode_info = null;
         return;

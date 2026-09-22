@@ -10,7 +10,7 @@ import { mediaContainerQueryStr, mediaQueryStr } from '../config/constants.js';
 import { lsGetItem, lsKeys } from '../config/api.js';
 import { eleIds } from '../config/ele-ids.js';
 import { currentDanmakuInfoContainerId } from '../config/options.js';
-import { getById, getByClass, waitForElement } from '../utils/dom.js';
+import { getActiveMedia, getActiveMediaContainer, getById, waitForElement } from '../utils/dom.js';
 import { danmakuParser } from './parser.js';
 import { danmakuFilter } from './filter.js';
 import { buildProgressBarChart } from './chart.js';
@@ -51,19 +51,38 @@ export async function createDanmaku(comments, hooks = {}) {
     const _comments = danmakuFilter(commentsParsed);
     console.log('[加载]弹幕成功: ' + _comments.length);
 
-    const _media = document.querySelector(mediaQueryStr);
-    if (!_media) {
-        if (!window.ede.danmaku) {
-            window.ede.danmaku = { comments: _comments };
-        }
-        buildCurrentDanmakuInfo(currentDanmakuInfoContainerId);
-        throw new Error('用户已退出视频播放');
-    }
+    const wrapperTop = 0;
+    let candidateContainer = null;
+    let stableChecks = 0;
+    const _container = await waitForElement(
+        () => {
+            const container = getActiveMediaContainer(mediaContainerQueryStr);
+            if (!container) return null;
 
+            // playbackstart 早于 Emby OSD 的根节点切换。连续一秒取到同一
+            // 可见根节点后再创建 canvas，避免它随后变成 page-hidden 而缩成 0x0。
+            if (container !== candidateContainer) {
+                candidateContainer = container;
+                stableChecks = 0;
+            }
+            stableChecks += 1;
+            return stableChecks >= 10 ? container : null;
+        },
+        null,
+        0,
+        100,
+        window.ede?.destroyIntervalIds
+    );
+    if (!_container) throw new DOMException('Danmaku container wait cancelled', 'AbortError');
+    if (session) assertLoadSession(window.ede, session);
+
+    // Emby 新版过渡时会将实际 video 移到 body；DOM 工具会排除隐藏旧 OSD。
+    const _media = getActiveMedia(mediaContainerQueryStr, mediaQueryStr)
+        || document.getElementById(eleIds.h5VideoAdapter);
+    if (!_media) throw new Error('当前播放页不存在 video 标签');
     if (!isVersionOld) _media.style.position = 'absolute';
 
-    const wrapperTop = 0;
-    let wrapper = getById(eleIds.danmakuWrapper);
+    let wrapper = getById(eleIds.danmakuWrapper, _container);
     if (wrapper) wrapper.remove();
     wrapper = document.createElement('div');
     wrapper.id = eleIds.danmakuWrapper;
@@ -76,15 +95,6 @@ export async function createDanmaku(comments, hooks = {}) {
         pointer-events: none;
     `;
 
-    const _container = await waitForElement(
-        mediaContainerQueryStr,
-        null,
-        0,
-        100,
-        window.ede?.destroyIntervalIds
-    );
-    if (!_container) throw new DOMException('Danmaku container wait cancelled', 'AbortError');
-    if (session) assertLoadSession(window.ede, session);
     _container.prepend(wrapper);
 
     const _speed = 144 * lsGetItem(lsKeys.speed.id);
@@ -175,7 +185,7 @@ export async function getCommentsByPluginApi(mediaServerItemId, signal) {
  * @param {object} [hooks] - { buildCurrentDanmakuInfo }
  */
 export async function loadDanmaku(loadType = LOAD_TYPE.CHECK, hooks = {}) {
-    const _media = document.querySelector(mediaQueryStr);
+    const _media = getActiveMedia(mediaContainerQueryStr, mediaQueryStr);
     if (!_media) {
         console.warn('用户已退出视频播放,停止加载弹幕');
         return false;

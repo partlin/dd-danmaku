@@ -4,11 +4,12 @@
  * 从 ede.js 5113-5180 行迁移
  */
 
-import { mediaQueryStr } from '../config/constants.js';
+import { mediaContainerQueryStr, mediaQueryStr } from '../config/constants.js';
 import { eleIds } from '../config/ele-ids.js';
 import { lsKeys, lsGetItem } from '../config/api.js';
 import { OS } from '../utils/platform.js';
 import { playbackEventsRefresh } from './emby-events.js';
+import { getActiveMedia } from '../utils/dom.js';
 
 /**
  * 平滑补充 <video> timeupdate 中秒级间隔缺失的 100ms 间隙
@@ -36,7 +37,8 @@ export async function initH5VideoAdapter() {
     const viewGeneration = ede?.viewGeneration;
     const isCurrentView = () =>
         ede && window.ede === ede && ede.viewGeneration === viewGeneration;
-    let _media = document.querySelector(mediaQueryStr);
+    let _media = getActiveMedia(mediaContainerQueryStr, mediaQueryStr)
+        || document.getElementById(eleIds.h5VideoAdapter);
     if (_media && _media.id !== eleIds.h5VideoAdapter) return;
 
     if (!_media) {

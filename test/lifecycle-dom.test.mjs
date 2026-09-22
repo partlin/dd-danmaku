@@ -7,7 +7,7 @@ import {
     startViewSession,
     syncPlaybackItemSession,
 } from '../src/core/lifecycle.js';
-import { waitForElement } from '../src/utils/dom.js';
+import { getActiveMedia, getActiveMediaContainer, waitForElement } from '../src/utils/dom.js';
 import {
     cleanupViewUI,
     getActiveViewRoot,
@@ -151,14 +151,11 @@ test('隐藏旧 OSD 已有按钮时仍会在当前 OSD 挂载且保持幂等', a
     const documentMock = {
         querySelector(selector) {
             if (selector === '#danmakuCtr') return oldControls;
-            if (selector === '.graphicContentContainer:not(.hide)') return activeRoot;
-            if (selector === '.graphicContentContainer:not(.hide) .videoOsdBottom-maincontrols') {
-                return mainControls;
-            }
+            if (selector === '.graphicContentContainer') return activeRoot;
             return null;
         },
         querySelectorAll(selector) {
-            return selector === '.graphicContentContainer:not(.hide)' ? [activeRoot] : [];
+            return selector === '.graphicContentContainer' ? [activeRoot] : [];
         },
         createElement() { return fakeElement(); },
     };
@@ -201,6 +198,47 @@ test('page-hidden 旧 OSD 不会被识别为活动播放页', () => {
 
     assert.equal(isViewRootActive(hiddenRoot), false);
     assert.equal(isViewRootActive(activeRoot), true);
+});
+
+test('弹幕渲染只选择活动 OSD 内的 video 和容器', (t) => {
+    const previousDocument = globalThis.document;
+    const oldRoot = fakeElement();
+    const oldVideo = { id: 'old-video' };
+    oldRoot.classList = { contains: (name) => name === 'page-hidden', add() {} };
+    oldRoot.querySelector = (selector) => selector === 'video' ? oldVideo : null;
+
+    const activeRoot = fakeElement();
+    const activeVideo = { id: 'active-video' };
+    activeRoot.querySelector = (selector) => selector === 'video' ? activeVideo : null;
+    globalThis.document = {
+        querySelectorAll: (selector) => selector === '.graphicContentContainer'
+            ? [oldRoot, activeRoot]
+            : [],
+    };
+    t.after(() => { globalThis.document = previousDocument; });
+
+    assert.equal(getActiveMediaContainer('.graphicContentContainer'), activeRoot);
+    assert.equal(getActiveMedia('.graphicContentContainer', 'video'), activeVideo);
+});
+
+test('Emby 将 video 重挂到 body 时仍使用可见 video 和稳定活动 OSD', (t) => {
+    const previousDocument = globalThis.document;
+    const oldRoot = fakeElement();
+    oldRoot.classList = { contains: (name) => name === 'page-hidden', add() {} };
+    const activeRoot = fakeElement();
+    const reparentedVideo = fakeElement();
+    reparentedVideo.closest = () => null;
+    globalThis.document = {
+        querySelectorAll: (selector) => {
+            if (selector === '.graphicContentContainer') return [oldRoot, activeRoot];
+            if (selector === 'video') return [reparentedVideo];
+            return [];
+        },
+    };
+    t.after(() => { globalThis.document = previousDocument; });
+
+    assert.equal(getActiveMediaContainer('.graphicContentContainer'), activeRoot);
+    assert.equal(getActiveMedia('.graphicContentContainer', 'video'), reparentedVideo);
 });
 
 test('过期 UI 会话不可操作新 OSD，旧页清理不误删新按钮', () => {

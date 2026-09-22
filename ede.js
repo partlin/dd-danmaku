@@ -665,7 +665,7 @@
     }
 
     function initListener() {
-        const _media = document.querySelector(mediaQueryStr);
+        const _media = getActiveMedia() || document.getElementById(eleIds.h5VideoAdapter);
         // 页面未加载
         if (!_media) {
             window.ede.episode_info && (window.ede.episode_info = null);
@@ -735,12 +735,29 @@
     }
 
     function getActiveViewRoot() {
-        const queryStr = mediaContainerQueryStr.includes(notHide)
-            ? mediaContainerQueryStr
-            : mediaContainerQueryStr + notHide;
-        const roots = Array.from(document.querySelectorAll?.(queryStr) || []);
+        return getActiveMediaContainer();
+    }
+
+    function getActiveMediaContainer() {
+        const roots = Array.from(document.querySelectorAll?.(mediaContainerQueryStr) || []);
         const activeRoots = roots.filter(isViewRootActive);
         return activeRoots.length ? activeRoots[activeRoots.length - 1] : null;
+    }
+
+    function getActiveMedia() {
+        const container = getActiveMediaContainer();
+        const containedMedia = container?.querySelector?.(mediaQueryStr);
+        if (containedMedia) { return containedMedia; }
+
+        // Emby 4.10 会在 OSD 过渡期间把实际 video 暂时移到 body。
+        // 此时不能因为 video 不在 OSD 子树中就回退到隐藏旧页的 video。
+        const mediaList = Array.from(document.querySelectorAll?.(mediaQueryStr) || []);
+        const visibleMedia = mediaList.filter((media) => {
+            if (!isViewRootActive(media)) { return false; }
+            const parentContainer = media.closest?.(mediaContainerQueryStr);
+            return !parentContainer || isViewRootActive(parentContainer);
+        });
+        return visibleMedia.length ? visibleMedia[visibleMedia.length - 1] : null;
     }
 
     function isViewRootActive(viewRoot) {
@@ -2380,20 +2397,28 @@
         let _comments = danmakuFilter(commentsParsed);
         console.log('[加载]弹幕成功: ' + _comments.length);
 
-        const _media = document.querySelector(mediaQueryStr);
-        if (!_media) {
-            // this only working on quickDebug
-            if (!window.ede.danmaku) {
-                window.ede.danmaku = { comments: _comments, };
-            }
-            // 设置弹窗内的弹幕信息
-            buildCurrentDanmakuInfo(currentDanmakuInfoContainerId);
-            throw new Error('用户已退出视频播放');
-        }
-        if (!isVersionOld) { _media.style.position = 'absolute'; }
         // from https://github.com/Izumiko/jellyfin-danmaku/blob/jellyfin/ede.js#L1104
         const wrapperTop = 0; // 播放器 UI 顶部阴影
-        let wrapper = getById(eleIds.danmakuWrapper);
+        let candidateContainer = null;
+        let stableChecks = 0;
+        const _container = await waitForElement(() => {
+            const container = getActiveMediaContainer();
+            if (!container) { return null; }
+
+            // playbackstart 早于 Emby OSD 的根节点切换。连续一秒取到同一
+            // 可见根节点后再创建 canvas，避免它随后变成 page-hidden 而缩成 0x0。
+            if (container !== candidateContainer) {
+                candidateContainer = container;
+                stableChecks = 0;
+            }
+            stableChecks += 1;
+            return stableChecks >= 10 ? container : null;
+        }, null, 0, 100);
+        const _media = getActiveMedia()
+            || document.getElementById(eleIds.h5VideoAdapter);
+        if (!_media) { throw new Error('当前播放页不存在 video 标签'); }
+        if (!isVersionOld) { _media.style.position = 'absolute'; }
+        let wrapper = getById(eleIds.danmakuWrapper, _container);
         wrapper && wrapper.remove();
         wrapper = document.createElement('div');
         wrapper.id = eleIds.danmakuWrapper;
@@ -2404,8 +2429,6 @@
         // wrapper.style.opacity = lsGetItem(lsKeys.fontOpacity.id); // 弹幕整体透明度
         wrapper.style.top = wrapperTop + 'px';
         wrapper.style.pointerEvents = 'none';
-        // const _container = document.querySelector(mediaContainerQueryStr);
-        const _container = await waitForElement(mediaContainerQueryStr);
         _container.prepend(wrapper);
         let _speed = 144 * lsGetItem(lsKeys.speed.id);
         window.ede.danmaku = new Danmaku({
@@ -2503,7 +2526,7 @@
     }
 
     async function loadDanmaku(loadType = LOAD_TYPE.CHECK) {
-        const _media = document.querySelector(mediaQueryStr);
+        const _media = getActiveMedia();
         if (!_media) {
             console.warn('用户已退出视频播放,停止加载弹幕');
             return false;
@@ -5502,7 +5525,7 @@
     }
 
     async function initH5VideoAdapter() {
-        let _media = document.querySelector(mediaQueryStr);
+        let _media = getActiveMedia() || document.getElementById(eleIds.h5VideoAdapter);
         if (_media) {
             if (_media.id) { // 若是手动创建的<video>
                 videoTimeUpdateInterval(_media, true);

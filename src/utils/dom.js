@@ -6,6 +6,55 @@
 import { check_interval } from '../config/constants.js';
 
 /**
+ * Emby 的 SPA 切页会短暂保留隐藏的旧播放页，DOM 查询必须排除它。
+ */
+export function isElementVisible(element) {
+    if (!element || element.isConnected === false) return false;
+    if (element.classList?.contains('hide') || element.classList?.contains('page-hidden')) {
+        return false;
+    }
+    if (element.getAttribute?.('aria-hidden') === 'true') return false;
+
+    const getComputedStyleFn = globalThis.window?.getComputedStyle || globalThis.getComputedStyle;
+    if (typeof getComputedStyleFn === 'function') {
+        const style = getComputedStyleFn(element);
+        if (style?.display === 'none' || style?.visibility === 'hidden') return false;
+    }
+    if (typeof element.getClientRects === 'function' && element.getClientRects().length === 0) {
+        return false;
+    }
+    return true;
+}
+
+/**
+ * 返回当前可见播放页的媒体容器，避免误命中 SPA 暂留的旧 OSD。
+ */
+export function getActiveMediaContainer(containerQuery) {
+    const containers = Array.from(document.querySelectorAll?.(containerQuery) || []);
+    const activeContainers = containers.filter(isElementVisible);
+    return activeContainers.length ? activeContainers[activeContainers.length - 1] : null;
+}
+
+/**
+ * 仅在当前可见播放页内查找 video，不能退回到全局旧 video。
+ */
+export function getActiveMedia(containerQuery, mediaQuery) {
+    const container = getActiveMediaContainer(containerQuery);
+    const containedMedia = container?.querySelector?.(mediaQuery);
+    if (containedMedia) return containedMedia;
+
+    // Emby 4.10 会在 OSD 过渡期间把实际 video 暂时移到 body。
+    // 此时不能因为 video 不在 OSD 子树中就回退到隐藏旧页的 video。
+    const mediaList = Array.from(document.querySelectorAll?.(mediaQuery) || []);
+    const visibleMedia = mediaList.filter((media) => {
+        if (!isElementVisible(media)) return false;
+        const parentContainer = media.closest?.(containerQuery);
+        return !parentContainer || isElementVisible(parentContainer);
+    });
+    return visibleMedia.length ? visibleMedia[visibleMedia.length - 1] : null;
+}
+
+/**
  * 按 ID 获取元素
  * @param {string} childId - 元素 ID（不带 #）
  * @param {Document|Element} [parentNode=document] - 父节点
