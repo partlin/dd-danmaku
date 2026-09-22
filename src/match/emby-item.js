@@ -5,6 +5,7 @@
  */
 
 import { lsLocalKeys } from '../config/ls-local-keys.js';
+import { assertLoadSession } from '../core/lifecycle.js';
 
 async function getEmbyItemInfo() {
     if (typeof require === 'function') {
@@ -22,12 +23,18 @@ async function fatchEmbyItemInfo(id) {
  * 根据当前播放项获取匹配信息映射
  * @returns {Promise<object|null>}
  */
-export async function getMapByEmbyItemInfo() {
+export async function getMapByEmbyItemInfo(session) {
     let item = await getEmbyItemInfo();
+    if (session) assertLoadSession(window.ede, session);
     if (!item && window.ede?.itemId) {
         item = await fatchEmbyItemInfo(window.ede.itemId);
+        if (session) assertLoadSession(window.ede, session);
     }
     if (!item) return null;
+
+    if (session?.itemId && item.Id !== session.itemId) {
+        throw new DOMException('Playback item changed during metadata request', 'AbortError');
+    }
 
     const getProviderId = (providerIds, key) => {
         if (!providerIds || typeof providerIds !== 'object') return null;
@@ -39,6 +46,7 @@ export async function getMapByEmbyItemInfo() {
     if (item.Type === 'Episode' && item.SeriesId) {
         try {
             const seriesInfo = await ApiClient.getItem(ApiClient.getCurrentUserId(), item.SeriesId);
+            if (session) assertLoadSession(window.ede, session);
             seriesTmdbId = getProviderId(seriesInfo?.ProviderIds, 'Tmdb');
         } catch (e) {
             console.warn('[tmdbId] 获取剧集 tmdbId 失败:', e);
@@ -52,6 +60,9 @@ export async function getMapByEmbyItemInfo() {
         return null;
     }
 
+    if (session && !session.itemId) {
+        session.itemId = item.Id;
+    }
     window.ede.itemId = item.Id;
     let _id;
     let animeName;
@@ -89,6 +100,7 @@ export async function getMapByEmbyItemInfo() {
     if (!item.MediaSources || item.MediaSources.length === 0) {
         try {
             const fullItem = await fatchEmbyItemInfo(item.Id);
+            if (session) assertLoadSession(window.ede, session);
             if (fullItem && fullItem.MediaSources && fullItem.MediaSources.length > 0) {
                 item = fullItem;
             }

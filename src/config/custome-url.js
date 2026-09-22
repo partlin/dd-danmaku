@@ -8,6 +8,13 @@ import * as userConfig from '../user-config.js';
 
 const customeUrlMsg1 = '限弹弹 play API 兼容结构';
 
+// 兼容历史高级配置：用户可在 localStorage 中保存模板字符串。
+// 此入口刻意集中保留动态执行，调用方只传入下列白名单变量；不要用于任何远端响应内容。
+function evaluateLegacyUrlTemplate(template, variables) {
+    const { episodeId, chConvert, url, animeId } = variables;
+    return eval('`' + template + '`');
+}
+
 export const customeUrl = {
     init: () => {
         customeUrl.mapping.forEach((obj) => obj.rewrite(lsGetItem(obj.lsKey.id)));
@@ -33,7 +40,8 @@ export const customeUrl = {
             divId: eleIds.customeGetCommentDiv,
             lsKey: lsKeys.customeGetCommentUrl,
             rewrite: (tl) => {
-                dandanplayApi.getComment = (episodeId, chConvert) => eval('`' + tl + '`');
+                dandanplayApi.getComment = (episodeId, chConvert) =>
+                    evaluateLegacyUrlTemplate(tl, { episodeId, chConvert });
             },
             msg1: customeUrlMsg1,
             msg2: '变量: { episodeId: 章节 ID, chConvert: 简繁转换, }',
@@ -42,7 +50,7 @@ export const customeUrl = {
             divId: eleIds.customeGetExtcommentDiv,
             lsKey: lsKeys.customeGetExtcommentUrl,
             rewrite: (tl) => {
-                dandanplayApi.getExtcomment = (url) => eval('`' + tl + '`');
+                dandanplayApi.getExtcomment = (url) => evaluateLegacyUrlTemplate(tl, { url });
             },
             msg1: customeUrlMsg1,
             msg2: '变量: { url: 附加弹幕输入框中的网址, }',
@@ -51,7 +59,7 @@ export const customeUrl = {
             divId: eleIds.customePosterImgDiv,
             lsKey: lsKeys.customePosterImgUrl,
             rewrite: (tl) => {
-                dandanplayApi.posterImg = (animeId) => eval('`' + tl + '`');
+                dandanplayApi.posterImg = (animeId) => evaluateLegacyUrlTemplate(tl, { animeId });
             },
             msg1: customeUrlMsg1,
             msg2: '变量: { animeId: 弹弹 play 的作品 ID, }',

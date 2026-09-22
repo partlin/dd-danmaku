@@ -34,7 +34,15 @@ export function writeLsSeasonInfo(_season_key, newSeasonInfo) {
         return console.log('_season_key is undefined, skip');
     }
     let seasonInfoListStr = localStorage.getItem(_season_key);
-    let seasonInfoList = seasonInfoListStr ? JSON.parse(seasonInfoListStr) : [];
+    let seasonInfoList = [];
+    if (seasonInfoListStr) {
+        try {
+            seasonInfoList = JSON.parse(seasonInfoListStr);
+            if (!Array.isArray(seasonInfoList)) seasonInfoList = [];
+        } catch (error) {
+            console.warn('[赛季缓存] 记录损坏，已重建:', error);
+        }
+    }
     const existingSeasonInfo = seasonInfoList.find((si) => si.name === newSeasonInfo.name);
     if (!existingSeasonInfo) {
         seasonInfoList.push(newSeasonInfo);
@@ -68,11 +76,18 @@ export function parseAnimeName(animeName) {
  * @param {string} prefix
  * @returns {Promise<object|null>}
  */
-export async function lsSeasonSearchEpisodes(_season_key, episode, prefix, searchTitle) {
+export async function lsSeasonSearchEpisodes(_season_key, episode, prefix, searchTitle, signal) {
     const seasonInfoListStr = window.localStorage.getItem(_season_key);
     if (!seasonInfoListStr) return null;
 
-    const seasonInfoList = JSON.parse(seasonInfoListStr);
+    let seasonInfoList;
+    try {
+        seasonInfoList = JSON.parse(seasonInfoListStr);
+    } catch (error) {
+        console.warn('[赛季缓存] 记录损坏，已清除:', error);
+        window.localStorage.removeItem(_season_key);
+        return null;
+    }
     const selectedSeasonInfo = selectSeasonInfo(searchTitle, seasonInfoList, episode);
 
     if (selectedSeasonInfo) {
@@ -82,7 +97,8 @@ export async function lsSeasonSearchEpisodes(_season_key, episode, prefix, searc
         const animaInfo = await fetchSearchEpisodes(
             selectedSeasonInfo.name,
             newEpisode,
-            selectedSeasonInfo.apiPrefix || prefix
+            selectedSeasonInfo.apiPrefix || prefix,
+            signal
         );
         if (animaInfo?.animes) {
             animaInfo.animes = prioritizeSeasonCandidates(searchTitle, animaInfo.animes);
@@ -103,7 +119,7 @@ export async function lsSeasonSearchEpisodes(_season_key, episode, prefix, searc
  * @param {object} itemInfoMap - 由 getMapByEmbyItemInfo 提供
  * @returns {Promise<object|null>}
  */
-export async function searchEpisodes(itemInfoMap) {
+export async function searchEpisodes(itemInfoMap, signal) {
     const {
         _season_key,
         animeName,
@@ -147,7 +163,8 @@ export async function searchEpisodes(itemInfoMap) {
         _season_key,
         episode,
         selectedApiConfig.prefix,
-        animeName
+        animeName,
+        signal
     );
     if (
         animaRes?.animaInfo?.animes?.length > 0 &&
@@ -161,7 +178,7 @@ export async function searchEpisodes(itemInfoMap) {
         };
     }
 
-    const tmdbMatchResult = await tryMatchByTmdbId(itemInfoMap, apiConfigs, apiPriority);
+    const tmdbMatchResult = await tryMatchByTmdbId(itemInfoMap, apiConfigs, apiPriority, signal);
     if (tmdbMatchResult) return tmdbMatchResult;
 
     const hashMatchResult = await tryMatchByHash(
@@ -171,7 +188,8 @@ export async function searchEpisodes(itemInfoMap) {
         size,
         duration,
         apiConfigs,
-        apiPriority
+        apiPriority,
+        signal
     );
     if (hashMatchResult) return hashMatchResult;
 
@@ -191,7 +209,7 @@ export async function searchEpisodes(itemInfoMap) {
             }
         }
 
-        let searchAnimaInfo = await fetchSearchEpisodes(searchTitle, searchEpisode, config.prefix);
+        let searchAnimaInfo = await fetchSearchEpisodes(searchTitle, searchEpisode, config.prefix, signal);
         if (
             searchAnimaInfo?.animes?.length > 0 &&
             hasCompatibleEpisode(searchAnimaInfo, searchEpisode)
@@ -204,7 +222,7 @@ export async function searchEpisodes(itemInfoMap) {
             };
         }
 
-        searchAnimaInfo = await fetchSearchEpisodes(episodeName, null, config.prefix);
+        searchAnimaInfo = await fetchSearchEpisodes(episodeName, null, config.prefix, signal);
         if (
             searchAnimaInfo?.animes?.length > 0 &&
             hasCompatibleEpisode(searchAnimaInfo, episode)
@@ -218,11 +236,11 @@ export async function searchEpisodes(itemInfoMap) {
         }
     }
 
-    const animaInfo = await fetchSearchEpisodes(animeName, episode, selectedApiConfig.prefix);
+    const animaInfo = await fetchSearchEpisodes(animeName, episode, selectedApiConfig.prefix, signal);
     if (animaInfo?.animes?.length > 0 && hasCompatibleEpisode(animaInfo, episode)) {
         animaInfo.animes = prioritizeSeasonCandidates(animeName, animaInfo.animes);
         return { animeOriginalTitle: '', animaInfo, expectedEpisodeNumber: episode };
     }
 
-    return autoFailback(animeName, episode, seriesOrMovieId, selectedApiConfig.prefix);
+    return autoFailback(animeName, episode, seriesOrMovieId, selectedApiConfig.prefix, signal);
 }

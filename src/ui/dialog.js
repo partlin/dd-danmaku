@@ -10,67 +10,14 @@ import { eleIds } from '../config/ele-ids.js';
 import { classes } from '../config/icons.js';
 import { danmakuTabOpts } from './tabs/index.js';
 import { getMapByEmbyItemInfo } from '../match/index.js';
+import { embyDialog } from './dialog-service.js';
+export { embyDialog, closeEmbyDialog, embyAlert, embyToast } from './dialog-service.js';
 
 /**
  * 调用 Emby 原生 dialog 模块
  * @param {object} opts - { text, title, timeout, html, buttons }
  * @returns {Promise}
  */
-export async function embyDialog(opts = {}) {
-    const defaultOpts = { text: '', title: '', timeout: 0, html: '', buttons: [] };
-    opts = { ...defaultOpts, ...opts };
-    if (typeof require === 'function') {
-        return require(['dialog'])
-            .then((items) => items[0](opts))
-            .catch((error) => {
-                console.log('点击弹出框外部取消: ' + error);
-            });
-    }
-    return Promise.reject(new Error('Emby require not available'));
-}
-
-/**
- * 关闭当前弹窗
- */
-export function closeEmbyDialog() {
-    const footerItem = getByClass(classes.formDialogFooterItem);
-    if (footerItem) {
-        footerItem.dispatchEvent(new Event('click'));
-    }
-}
-
-/**
- * 调用 Emby 原生 alert 模块
- * @param {object} opts - { text, title, timeout, html }
- * @returns {Promise}
- */
-export async function embyAlert(opts = {}) {
-    const defaultOpts = { text: '', title: '', timeout: 0, html: '' };
-    opts = { ...defaultOpts, ...opts };
-    if (typeof require === 'function') {
-        return require(['alert'])
-            .then((items) => items[0](opts))
-            .catch((error) => {
-                console.log('点击弹出框外部取消: ' + error);
-            });
-    }
-    return Promise.reject(new Error('Emby require not available'));
-}
-
-/**
- * 调用 Emby 原生 toast 模块
- * @param {object} opts - { text, secondaryText, icon, iconStrikeThrough }
- * @returns {Promise}
- */
-export async function embyToast(opts = {}) {
-    const defaultOpts = { text: '', secondaryText: '', icon: '', iconStrikeThrough: false };
-    opts = { ...defaultOpts, ...opts };
-    if (typeof require === 'function') {
-        return require(['toast'], toast => toast(opts));
-    }
-    return Promise.reject(new Error('Emby require not available'));
-}
-
 /**
  * 弹窗容器就绪后的回调，构建 Tab 内容
  * @param {HTMLElement} dialogContainer

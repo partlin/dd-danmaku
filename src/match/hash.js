@@ -7,26 +7,7 @@ import { fetchMatchApi } from './search.js';
 import { selectBestMatch } from './fallback.js';
 import { isSeasonCompatible, prioritizeSeasonCandidates } from './season.js';
 import { isEpisodeCompatible } from './episode-number.js';
-
-/**
- * 简化的 MD5 实现（与 ede.js 保持一致）
- * 注：当前为 mock 实现，返回固定哈希，实际匹配依赖弹弹 play 服务端
- */
-const SparkMD5 = {
-    ArrayBuffer: function () {
-        this._buff = new DataView(new ArrayBuffer(0));
-        this._length = 0;
-        this._hash = [1732584193, -271733879, -1732584194, 271733878];
-    },
-};
-
-SparkMD5.ArrayBuffer.prototype.append = function (arrayBuffer) {
-    return this;
-};
-
-SparkMD5.ArrayBuffer.prototype.end = function () {
-    return 'a1b2c3d4e5f6789012345678901234567890abcd'.substring(0, 32);
-};
+import SparkMD5 from 'spark-md5/spark-md5.min.js';
 
 /**
  * 计算文件哈希（头尾各 16MB）
@@ -34,7 +15,7 @@ SparkMD5.ArrayBuffer.prototype.end = function () {
  * @param {number} fileSize
  * @returns {Promise<string|null>}
  */
-export async function calculateFileHash(streamUrl, fileSize) {
+export async function calculateFileHash(streamUrl, fileSize, signal) {
     if (!streamUrl || !fileSize) {
         console.warn('缺少 streamUrl 或 fileSize，无法计算哈希。');
         return null;
@@ -47,9 +28,7 @@ export async function calculateFileHash(streamUrl, fileSize) {
     }
 
     const authHeaders = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         Accept: '*/*',
-        'Accept-Encoding': 'identity',
     };
 
     const CHUNK_SIZE = 16 * 1024 * 1024;
@@ -58,11 +37,12 @@ export async function calculateFileHash(streamUrl, fileSize) {
     try {
         if (fileSize < CHUNK_SIZE * 2) {
             console.log(`[Hash] 文件大小 (${(fileSize / 1024 / 1024).toFixed(2)}MB) 小于32MB，将下载整个文件计算哈希。`);
-            const response = await fetch(streamUrl, { headers: authHeaders });
+            const response = await fetch(streamUrl, { headers: authHeaders, signal });
             if (!response.ok) {
                 throw new Error(`下载文件失败: ${response.status} ${response.statusText}`);
             }
             const arrayBuffer = await response.arrayBuffer();
+            if (arrayBuffer.byteLength === 0) throw new Error('下载的文件内容为空');
             spark.append(arrayBuffer);
         } else {
             console.log(`[Hash] 文件大小 (${(fileSize / 1024 / 1024).toFixed(2)}MB)，将分块下载计算哈希。`);
@@ -72,11 +52,14 @@ export async function calculateFileHash(streamUrl, fileSize) {
                     Range: `bytes=0-${CHUNK_SIZE - 1}`,
                     'Accept-Ranges': 'bytes',
                 },
+                signal,
             });
-            if (!headResponse.ok) {
+            if (headResponse.status !== 206) {
                 throw new Error(`下载文件头部失败: ${headResponse.status} ${headResponse.statusText}`);
             }
-            spark.append(await headResponse.arrayBuffer());
+            const headBuffer = await headResponse.arrayBuffer();
+            if (headBuffer.byteLength === 0) throw new Error('下载的文件头部为空');
+            spark.append(headBuffer);
 
             const tailResponse = await fetch(streamUrl, {
                 headers: {
@@ -84,17 +67,22 @@ export async function calculateFileHash(streamUrl, fileSize) {
                     Range: `bytes=${fileSize - CHUNK_SIZE}-${fileSize - 1}`,
                     'Accept-Ranges': 'bytes',
                 },
+                signal,
             });
-            if (!tailResponse.ok) {
+            if (tailResponse.status !== 206) {
                 throw new Error(`下载文件尾部失败: ${tailResponse.status} ${tailResponse.statusText}`);
             }
-            spark.append(await tailResponse.arrayBuffer());
+            const tailBuffer = await tailResponse.arrayBuffer();
+            if (tailBuffer.byteLength === 0) throw new Error('下载的文件尾部为空');
+            spark.append(tailBuffer);
         }
         const hash = spark.end();
         console.log(`[Hash] 文件哈希计算成功: ${hash}`);
         return hash;
     } catch (error) {
-        console.warn('[Hash] 文件哈希计算过程中发生错误:', error);
+        if (error?.name !== 'AbortError') {
+            console.warn('[Hash] 文件哈希计算过程中发生错误:', error);
+        }
         return null;
     }
 }
@@ -117,29 +105,32 @@ export async function tryMatchByHash(
     size,
     duration,
     apiConfigs,
-    apiPriority
+    apiPriority,
+    signal
 ) {
+    if (!streamUrl || !(size > 0)) {
+        console.warn('未找到播放链接或文件大小，跳过哈希匹配。');
+        return null;
+    }
+    const fileHash = await calculateFileHash(streamUrl, size, signal);
+    if (!fileHash || signal?.aborted) {
+        console.warn('没有有效文件哈希，跳过哈希匹配。');
+        return null;
+    }
     const matchPayload = {
         fileName: animeName,
-        fileHash: 'a1b2c3d4e5f67890abcd1234ef567890',
+        fileHash,
         fileSize: size || 0,
         videoDuration: Math.floor(duration || 0),
         matchMode: 'hashAndFileName',
     };
-
-    if (streamUrl && size > 0) {
-        console.log(`准备通过播放链接计算文件哈希`);
-        matchPayload.fileHash = await calculateFileHash(streamUrl, size) || matchPayload.fileHash;
-    } else {
-        console.warn('未找到播放链接或文件大小，将使用假哈希值进行匹配。');
-    }
 
     for (const apiKey of apiPriority) {
         const config = apiConfigs[apiKey];
         if (!config || !config.enabled || (apiKey === 'custom' && !config.prefix)) continue;
 
         console.log(`[自动匹配] 尝试 ${config.name} /match 接口`);
-        const matchResult = await fetchMatchApi(matchPayload, config.prefix);
+        const matchResult = await fetchMatchApi(matchPayload, config.prefix, signal);
 
         if (matchResult?.isMatched && matchResult.animes?.length > 0) {
             const candidates = prioritizeSeasonCandidates(animeName, matchResult.animes);

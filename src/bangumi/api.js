@@ -43,7 +43,13 @@ export async function getEpisodeBangumiRel() {
     const _bangumi_key = lsLocalKeys.bangumiEpInfoPrefix + episode_info.episodeId;
     let bangumiInfoLs = localStorage.getItem(_bangumi_key);
     if (bangumiInfoLs) {
-        bangumiInfoLs = JSON.parse(bangumiInfoLs);
+        try {
+            bangumiInfoLs = JSON.parse(bangumiInfoLs);
+        } catch (error) {
+            console.warn('[Bangumi] 关联缓存损坏，已清除:', error);
+            localStorage.removeItem(_bangumi_key);
+            bangumiInfoLs = null;
+        }
     }
     let bangumiEpsRes = bangumiInfoLs ? bangumiInfoLs.bangumiEpsRes : null;
     let subjectId = bangumiInfoLs ? bangumiInfoLs.subjectId : null;
@@ -96,12 +102,19 @@ export async function getEpisodeBangumiRel() {
 export async function putBangumiEpStatus(token) {
     const bangumiInfo = await getEpisodeBangumiRel();
     const { subjectId, bgmEpisodeIndex } = bangumiInfo;
-    const episodeIndex = bgmEpisodeIndex ? bgmEpisodeIndex : bangumiInfo.episodeIndex;
+    const episodeIndex = bgmEpisodeIndex ?? bangumiInfo.episodeIndex;
     console.log('准备校验 Bangumi 条目收藏状态是否为看过');
     let bangumiMe = localStorage.getItem(lsLocalKeys.bangumiMe);
     if (bangumiMe) {
-        bangumiMe = JSON.parse(bangumiMe);
-    } else {
+        try {
+            bangumiMe = JSON.parse(bangumiMe);
+        } catch (error) {
+            console.warn('[Bangumi] 用户缓存损坏，已清除:', error);
+            localStorage.removeItem(lsLocalKeys.bangumiMe);
+            bangumiMe = null;
+        }
+    }
+    if (!bangumiMe) {
         bangumiMe = await fetchBangumiApiGetMe(token);
     }
     let msg = '';

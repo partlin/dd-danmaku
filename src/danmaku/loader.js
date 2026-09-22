@@ -16,6 +16,13 @@ import { danmakuFilter } from './filter.js';
 import { buildProgressBarChart } from './chart.js';
 import { getEpisodeInfo } from '../match/get-episode-info.js';
 import { fetchComment, fetchExtcommentActual } from '../match/search.js';
+import { aggregateExtComments } from './aggregate.js';
+import {
+    beginLoadSession,
+    assertLoadSession,
+    finishLoadSession,
+    isLoadSessionCurrent,
+} from '../core/lifecycle.js';
 
 /**
  * 创建并初始化弹幕实例
@@ -25,6 +32,8 @@ import { fetchComment, fetchExtcommentActual } from '../match/search.js';
  */
 export async function createDanmaku(comments, hooks = {}) {
     if (!comments) return;
+    const session = hooks.session;
+    if (session) assertLoadSession(window.ede, session);
 
     const buildCurrentDanmakuInfo =
         hooks.buildCurrentDanmakuInfo || (() => {});
@@ -67,7 +76,15 @@ export async function createDanmaku(comments, hooks = {}) {
         pointer-events: none;
     `;
 
-    const _container = await waitForElement(mediaContainerQueryStr);
+    const _container = await waitForElement(
+        mediaContainerQueryStr,
+        null,
+        0,
+        100,
+        window.ede?.destroyIntervalIds
+    );
+    if (!_container) throw new DOMException('Danmaku container wait cancelled', 'AbortError');
+    if (session) assertLoadSession(window.ede, session);
     _container.prepend(wrapper);
 
     const _speed = 144 * lsGetItem(lsKeys.speed.id);
@@ -125,11 +142,11 @@ export async function createDanmaku(comments, hooks = {}) {
  * @param {string} mediaServerItemId
  * @returns {Promise<object[]|null>}
  */
-export async function getCommentsByPluginApi(mediaServerItemId) {
+export async function getCommentsByPluginApi(mediaServerItemId, signal) {
     if (typeof ApiClient === 'undefined') return null;
     const url = `${ApiClient.serverAddress()}/api/danmu/${mediaServerItemId}/raw?X-Emby-Token=${ApiClient.accessToken()}`;
     try {
-        const response = await fetch(url);
+        const response = await fetch(url, { signal });
         if (!response.ok) return null;
         const xmlText = await response.text();
         if (!xmlText?.length) return null;
@@ -146,20 +163,10 @@ export async function getCommentsByPluginApi(mediaServerItemId) {
         }
         return comments;
     } catch (error) {
+        if (error?.name === 'AbortError') throw error;
         console.error('Failed to parse XML data:', error);
         return null;
     }
-}
-
-async function addExtCommentsForLoad(extUrl, extComments, hooks = {}) {
-    const episodeId = window.ede?.episode_info?.episodeId;
-    const comments = window.ede?.danmuCache?.[episodeId] || [];
-    if (!extComments) {
-        extComments = await fetchExtcommentActual(extUrl, comments);
-    }
-    if (!extComments?.length) return;
-    const allComments = comments.concat(extComments);
-    await createDanmaku(allComments, hooks).catch((err) => console.log(err));
 }
 
 /**
@@ -173,26 +180,31 @@ export async function loadDanmaku(loadType = LOAD_TYPE.CHECK, hooks = {}) {
         console.warn('用户已退出视频播放,停止加载弹幕');
         return false;
     }
-    if (loadType === LOAD_TYPE.RELOAD) window.ede.loading = false;
-    if (window.ede?.loading) {
+    if (
+        window.ede?.loading &&
+        ![LOAD_TYPE.RELOAD, LOAD_TYPE.REFRESH, LOAD_TYPE.SEARCH].includes(loadType)
+    ) {
         console.log('正在重新加载');
         return false;
     }
-    window.ede.loading = true;
+    const session = beginLoadSession(window.ede);
 
     const buildCurrentDanmakuInfoFn = hooks.buildCurrentDanmakuInfo || (() => {});
     const appendvideoOsdDanmakuInfoFn = hooks.appendvideoOsdDanmakuInfo || (() => {});
     const createHooks = {
         buildCurrentDanmakuInfo: buildCurrentDanmakuInfoFn,
         appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn,
+        session,
     };
 
     try {
         window.ede.onlineDanmakuOk = false;
-        const onlineLoaded = await loadOnlineDanmaku(loadType, hooks);
+        const onlineLoaded = await loadOnlineDanmaku(loadType, hooks, session);
+        assertLoadSession(window.ede, session);
         if (onlineLoaded || !lsGetItem(lsKeys.useFetchPluginXml.id)) return onlineLoaded;
 
-        const comments = await getCommentsByPluginApi(window.ede.itemId);
+        const comments = await getCommentsByPluginApi(window.ede.itemId, session.controller.signal);
+        assertLoadSession(window.ede, session);
         if (!comments?.length) return false;
 
         await createDanmaku(comments, createHooks);
@@ -204,10 +216,10 @@ export async function loadDanmaku(loadType = LOAD_TYPE.CHECK, hooks = {}) {
         if (title) title.innerText = `弹幕：${lsKeys.useFetchPluginXml.name} - ${comments.length}条`;
         return true;
     } catch (error) {
-        console.error('[加载]弹幕加载失败:', error);
+        if (error?.name !== 'AbortError') console.error('[加载]弹幕加载失败:', error);
         return false;
     } finally {
-        window.ede.loading = false;
+        finishLoadSession(window.ede, session);
     }
 }
 
@@ -216,20 +228,24 @@ export async function loadDanmaku(loadType = LOAD_TYPE.CHECK, hooks = {}) {
  * @param {string} loadType
  * @param {object} [hooks] - { buildCurrentDanmakuInfo }
  */
-export async function loadOnlineDanmaku(loadType, hooks = {}) {
+export async function loadOnlineDanmaku(loadType, hooks = {}, session) {
     const buildCurrentDanmakuInfoFn = hooks.buildCurrentDanmakuInfo || (() => {});
     const appendvideoOsdDanmakuInfoFn = hooks.appendvideoOsdDanmakuInfo || (() => {});
 
     const createHooks = {
         buildCurrentDanmakuInfo: buildCurrentDanmakuInfoFn,
         appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn,
+        session,
     };
 
     try {
         const info = await getEpisodeInfo(
             loadType !== LOAD_TYPE.SEARCH,
-            appendvideoOsdDanmakuInfoFn
+            appendvideoOsdDanmakuInfoFn,
+            session?.controller.signal,
+            session
         );
+        if (session) assertLoadSession(window.ede, session);
         if (!info) {
             if (loadType !== LOAD_TYPE.INIT) console.log('播放器未完成加载');
             return false;
@@ -252,31 +268,39 @@ export async function loadOnlineDanmaku(loadType, hooks = {}) {
         let comments =
             loadType === LOAD_TYPE.RELOAD ? window.ede?.danmuCache?.[episodeId] : null;
         if (!comments) {
-            comments = await fetchComment(episodeId);
+            comments = await fetchComment(episodeId, session?.controller.signal);
+            if (session) assertLoadSession(window.ede, session);
             window.ede.danmuCache = window.ede.danmuCache || {};
             window.ede.danmuCache[episodeId] = comments;
         }
         if (!comments?.length) return false;
 
-        await createDanmaku(comments, createHooks);
-        window.ede.onlineDanmakuOk = true;
-
         const extCommentCache = window.ede?.extCommentCache?.[window.ede.itemId] || {};
-        try {
-            await Promise.all(
-                objectEntries(extCommentCache).map(([key, val]) =>
-                    addExtCommentsForLoad(key, val, createHooks)
-                )
+        const extEntries = objectEntries(extCommentCache);
+        let allComments = comments;
+        if (extEntries.length > 0) {
+            const aggregated = await aggregateExtComments(
+                comments,
+                extEntries,
+                fetchExtcommentActual,
+                session?.controller.signal,
+                session
             );
-        } catch (error) {
-            console.warn('[在线弹幕]附加弹幕加载失败，不影响主弹幕:', error);
+            allComments = aggregated.comments;
+            if (aggregated.failedCount > 0) {
+                console.warn(`[在线弹幕] ${aggregated.failedCount} 个附加源加载失败`);
+            }
         }
+        await createDanmaku(allComments, createHooks);
+        window.ede.onlineDanmakuOk = true;
         const ctr = getById(eleIds.danmakuCtr);
         if (ctr) ctr.style.opacity = '1';
         return true;
     } catch (error) {
-        console.error('[在线弹幕]加载失败:', error);
-        window.ede.onlineDanmakuOk = false;
+        if (error?.name !== 'AbortError') console.error('[在线弹幕]加载失败:', error);
+        if (!session || isLoadSessionCurrent(window.ede, session)) {
+            window.ede.onlineDanmakuOk = false;
+        }
         return false;
     }
 }

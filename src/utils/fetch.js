@@ -6,21 +6,19 @@
 /**
  * 封装 fetch，支持 JSON 请求
  * @param {string} url
- * @param {object} [opts] - { token, headers, body, method }
+ * @param {object} [opts] - { token, headers, body, method, signal }
  * @returns {Promise<object>}
  */
 export async function fetchJson(url, opts = {}) {
-    const { token, headers, body } = opts;
+    const { token, headers, body, signal } = opts;
     let { method = 'GET' } = opts;
     if (method === 'GET' && body) {
         method = 'POST';
     }
     const requestHeaders = {
-        'Accept-Encoding': 'gzip',
         Accept: 'application/json',
-        'Content-Type': 'application/json',
-        'User-Agent': navigator.userAgent,
     };
+    if (body) requestHeaders['Content-Type'] = 'application/json';
     if (token) {
         requestHeaders.Authorization = `Bearer ${token}`;
     }
@@ -32,6 +30,7 @@ export async function fetchJson(url, opts = {}) {
         method,
         headers: requestHeaders,
         body: requestBody,
+        signal,
     });
     if (!response.ok) {
         throw new Error(`HTTP error! Status: ${response.status}`);

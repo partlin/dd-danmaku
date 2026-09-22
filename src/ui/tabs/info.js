@@ -25,7 +25,7 @@ export function buildCurrentDanmakuInfo(containerId) {
     if (!container) return;
 
     const episode_info = window.ede?.episode_info || {};
-    const { episodeTitle, animeId, animeTitle, apiName } = episode_info;
+    const { episodeTitle, animeId, animeTitle } = episode_info;
     const loadSum = window.ede ? getDanmakuComments(window.ede).length : 0;
     const downloadSum = window.ede?.commentsParsed?.length || 0;
 
@@ -35,9 +35,12 @@ export function buildCurrentDanmakuInfo(containerId) {
             <div>
                 <div>
                     <label class="${classes.embyLabel}">媒体名: </label>
-                    <div class="${classes.embyFieldDesc}">${animeTitle || '-'}</div>
+                    <div class="${classes.embyFieldDesc}" data-ede-anime-title></div>
                 </div>
-                ${episodeTitle ? `<div><label class="${classes.embyLabel}">章节名: </label><div class="${classes.embyFieldDesc}">${episodeTitle}</div></div>` : ''}
+                <div data-ede-episode-row>
+                    <label class="${classes.embyLabel}">章节名: </label>
+                    <div class="${classes.embyFieldDesc}" data-ede-episode-title></div>
+                </div>
                 <div>
                     <label class="${classes.embyLabel}">其它信息: </label>
                     <div class="${classes.embyFieldDesc}">获取总数: ${downloadSum}, 加载总数: ${loadSum}, 被过滤数: ${downloadSum - loadSum}</div>
@@ -56,6 +59,10 @@ export function buildCurrentDanmakuInfo(containerId) {
         </div>
     `;
     container.innerHTML = template.trim();
+    container.querySelector('[data-ede-anime-title]').textContent = animeTitle || '-';
+    const episodeRow = container.querySelector('[data-ede-episode-row]');
+    episodeRow.hidden = !episodeTitle;
+    episodeRow.querySelector('[data-ede-episode-title]').textContent = episodeTitle || '';
 
     if (animeId) {
         getById(eleIds.posterImgDiv, container).append(

@@ -3,27 +3,44 @@ const appId = APP_ID;
 const appSecret = APP_SECRET;
 
 const hostlist = { 'api.dandanplay.net': null };
+const allowedMethods = new Set(['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']);
+const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, User-Agent',
+};
+
+function errorResponse(message, status) {
+    return new Response(JSON.stringify({ error: message }), {
+        status,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+}
 
 async function handleRequest(request) {
     if (request.method === 'OPTIONS') {
-        return new Response(null, {
-            status: 204,
-            headers: {
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-                'Access-Control-Allow-Headers': 'Content-Type, Authorization, User-Agent',
-            },
-        });
+        return new Response(null, { status: 204, headers: corsHeaders });
     }
-    
-    const urlObj = new URL(request.url);
-    let url = urlObj.href.replace(urlObj.origin + '/cors/', '').trim();
-    if (0 !== url.indexOf('https://') && 0 === url.indexOf('https:')) {
-        url = url.replace('https:/', 'https://');
-    } else if (0 !== url.indexOf('http://') && 0 === url.indexOf('http:')) {
-        url = url.replace('http:/', 'http://');
+    if (!allowedMethods.has(request.method)) {
+        return errorResponse(`Method ${request.method} not allowed`, 405);
     }
-    const tUrlObj = new URL(url);
+
+    let tUrlObj;
+    try {
+        const urlObj = new URL(request.url);
+        const marker = urlObj.origin + '/cors/';
+        if (!urlObj.href.startsWith(marker)) return errorResponse('Missing /cors/ target URL', 400);
+        let targetUrl = urlObj.href.slice(marker.length).trim();
+        if (!targetUrl.startsWith('https://') && targetUrl.startsWith('https:')) {
+            targetUrl = targetUrl.replace('https:/', 'https://');
+        } else if (!targetUrl.startsWith('http://') && targetUrl.startsWith('http:')) {
+            targetUrl = targetUrl.replace('http:/', 'http://');
+        }
+        tUrlObj = new URL(targetUrl);
+        if (tUrlObj.protocol !== 'https:') return errorResponse('Only HTTPS targets are allowed', 400);
+    } catch (error) {
+        return errorResponse('Invalid target URL', 400);
+    }
     if (!(tUrlObj.hostname in hostlist)) {
         return Forbidden(tUrlObj);
     }
@@ -31,29 +48,41 @@ async function handleRequest(request) {
     const timestamp = Math.floor(Date.now() / 1000);
     const apiPath = tUrlObj.pathname;
     const signature = await generateSignature(appId, timestamp, apiPath, appSecret);
-    console.log('X-AppId: ' + appId);
-    console.log('X-Signature: ' + signature);
-    console.log('X-Timestamp: ' + timestamp);
     console.log('ApiPath: ' + apiPath);
 
     // 构建请求头，确保所有原始头部都被正确传递
     const headers = {};
+    const skippedHeaders = new Set([
+        'host',
+        'content-length',
+        'connection',
+        'transfer-encoding',
+        'cf-connecting-ip',
+        'cf-ipcountry',
+        'cf-ray',
+        'cf-visitor',
+    ]);
     for (const [key, value] of request.headers.entries()) {
-        headers[key] = value;
+        if (!skippedHeaders.has(key.toLowerCase())) headers[key] = value;
     }
     headers["X-AppId"] = appId;
     headers["X-Signature"] = signature;
     headers["X-Timestamp"] = timestamp.toString();
     headers["X-Auth"] = "1";
 
-    let response = await fetch(url, {
-        headers: headers,
-        body: request.body,
-        method: request.method,
-    });
-    response = new Response(response.body, response);
-    response.headers.set('Access-Control-Allow-Origin', '*');
-    return response;
+    try {
+        let response = await fetch(tUrlObj.href, {
+            headers,
+            body: ['GET'].includes(request.method) ? undefined : request.body,
+            method: request.method,
+        });
+        response = new Response(response.body, response);
+        Object.entries(corsHeaders).forEach(([key, value]) => response.headers.set(key, value));
+        return response;
+    } catch (error) {
+        console.error('Upstream request failed:', error?.message || error);
+        return errorResponse('Upstream request failed', 502);
+    }
 }
 
 /**
@@ -74,9 +103,7 @@ async function generateSignature(appId, timestamp, path, appSecret) {
 }
 
 function Forbidden(url) {
-    return new Response(`Hostname ${url.hostname} not allowed.`, {
-        status: 403,
-    });
+    return errorResponse(`Hostname ${url.hostname} not allowed.`, 403);
 }
 
 addEventListener('fetch', (event) => {

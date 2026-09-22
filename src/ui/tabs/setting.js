@@ -13,7 +13,7 @@ import { getSettingsJson } from '../../utils/helpers.js';
 import { LOAD_TYPE } from '../../config/constants.js';
 import { loadDanmaku } from '../../danmaku/loader.js';
 import { getCommentStyle } from '../../danmaku/parser.js';
-import { closeEmbyDialog } from '../dialog.js';
+import { closeEmbyDialog } from '../dialog-service.js';
 
 function doDanmakuSwitch() {
     const flag = !lsGetItem(lsKeys.switch.id);
@@ -244,9 +244,13 @@ function buildSettingsBackup(container) {
             () => {
                 const textEl = getById(eleIds.settingsText);
                 if (textEl?.value) {
-                    lsBatchSet(JSON.parse(textEl.value));
-                    loadDanmaku(LOAD_TYPE.INIT);
-                    closeEmbyDialog();
+                    try {
+                        lsBatchSet(JSON.parse(textEl.value));
+                        loadDanmaku(LOAD_TYPE.INIT);
+                        closeEmbyDialog();
+                    } catch (error) {
+                        console.error('[设置导入] JSON 格式无效:', error);
+                    }
                 }
             }
         )

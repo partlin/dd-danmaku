@@ -19,8 +19,7 @@ import { createDanmaku, loadDanmaku } from '../../danmaku/loader.js';
 import { appendvideoOsdDanmakuInfo } from '../../events/video-osd.js';
 import { buildCurrentDanmakuInfo } from './info.js';
 import { AppLogAspect } from '../../core/index.js';
-import { embyToast } from '../dialog.js';
-import { closeEmbyDialog } from '../dialog.js';
+import { embyToast, closeEmbyDialog } from '../dialog-service.js';
 
 const createDanmakuHooks = {
     buildCurrentDanmakuInfo,

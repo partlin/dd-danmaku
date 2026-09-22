@@ -36,7 +36,7 @@ import { buildProgressBarChart } from '../../danmaku/chart.js';
 import { appendvideoOsdDanmakuInfo, addHeaderClock, removeHeaderClock } from '../../events/video-osd.js';
 import { customeUrl } from '../../config/custome-url.js';
 import { fetchBangumiApiGetMe } from '../../bangumi/api.js';
-import { closeEmbyDialog } from '../dialog.js';
+import { closeEmbyDialog } from '../dialog-service.js';
 
 let timeoutCallbackId;
 const timeoutCallbackClear = () => timeoutCallbackId && clearTimeout(timeoutCallbackId);

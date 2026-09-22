@@ -121,7 +121,7 @@ export function initListener(handlers = {}) {
         if (window.ede?.episode_info) window.ede.episode_info = null;
         return;
     }
-    if (_media.getAttribute('ede_listening')) return;
+    const alreadyListening = _media.getAttribute('ede_listening') === 'true';
     console.log('正在初始化Listener');
 
     if (handlers.playbackEventsRefresh && handlers.onPlaybackStart) {
@@ -131,6 +131,7 @@ export function initListener(handlers = {}) {
         handlers.playbackEventsRefresh({ playbackstop: handlers.onPlaybackStop });
     }
     _media.setAttribute('ede_listening', 'true');
+    if (window.ede) window.ede.listeningMedia = _media;
 
     if (handlers.refreshEventListener) {
         if (handlers.onVideoOsdShow) handlers.refreshEventListener({ 'video-osd-show': handlers.onVideoOsdShow });
@@ -138,6 +139,8 @@ export function initListener(handlers = {}) {
     }
 
     console.log('Listener初始化完成');
+
+    if (alreadyListening) return;
 
     if ((OS.isAndroidEmbyNoisyX?.() || OS.isEmbyUWP?.()) && handlers.loadDanmaku) {
         handlers.loadDanmaku('init');

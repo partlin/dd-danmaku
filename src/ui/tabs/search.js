@@ -20,9 +20,15 @@ import { LOAD_TYPE } from '../../config/constants.js';
 import { fetchSearchEpisodes, fetchExtcommentActual, fetchComment } from '../../match/search.js';
 import { parseAnimeName, writeLsSeasonInfo } from '../../match/episode.js';
 import { createDanmaku, loadDanmaku } from '../../danmaku/loader.js';
-import { embyToast, closeEmbyDialog } from '../dialog.js';
+import { aggregateExtComments } from '../../danmaku/aggregate.js';
+import { embyToast, closeEmbyDialog } from '../dialog-service.js';
 import { calculateStringSimilarity } from '../../match/similarity.js';
 import { createSeasonInfo, prioritizeSeasonCandidates } from '../../match/season.js';
+import {
+    beginLoadSession,
+    assertLoadSession,
+    finishLoadSession,
+} from '../../core/lifecycle.js';
 
 const createDanmakuHooks = {
     buildCurrentDanmakuInfo,
@@ -30,6 +36,8 @@ const createDanmakuHooks = {
 };
 
 async function doDanmakuSearchEpisode() {
+    const session = beginLoadSession(window.ede);
+    try {
     const embySearch = getById(eleIds.danmakuSearchName);
     if (!embySearch) return;
     const searchName = embySearch.value.trim();
@@ -77,7 +85,13 @@ async function doDanmakuSearchEpisode() {
         console.log(
             `[手动匹配][${config.name}] 正在搜索: 标题='${manualSearchTitle}', 集数=${manualSearchEpisode || '无'}`
         );
-        const animaInfo = await fetchSearchEpisodes(manualSearchTitle, manualSearchEpisode, config.prefix);
+        const animaInfo = await fetchSearchEpisodes(
+            manualSearchTitle,
+            manualSearchEpisode,
+            config.prefix,
+            session.controller.signal
+        );
+        assertLoadSession(window.ede, session);
         if (animaInfo && animaInfo.animes.length > 0) {
             console.log(`[手动匹配][${config.name}] 搜索成功，找到 ${animaInfo.animes.length} 个结果。`);
             animaInfo.animes.forEach((anime) => {
@@ -155,6 +169,16 @@ async function doDanmakuSearchEpisode() {
 
     const apiSourceDiv = getById(eleIds.searchApiSource);
     if (apiSourceDiv) apiSourceDiv.innerText = `来源: ${selectedAnime.apiName}`;
+    } catch (error) {
+        if (error?.name !== 'AbortError') {
+            console.error('手动搜索弹幕失败:', error);
+            embyToast({ text: `手动搜索弹幕失败: ${error.message || error}` });
+        }
+    } finally {
+        const activeSpinner = getByClass(classes.mdlSpinner);
+        if (activeSpinner) activeSpinner.classList.add('hide');
+        finishLoadSession(window.ede, session);
+    }
 }
 
 function doSearchTitleSwtich(e) {
@@ -166,7 +190,13 @@ function doSearchTitleSwtich(e) {
         return;
     }
     const { _episode_key, seriesOrMovieId } = window.ede.searchDanmakuOpts;
-    const episode_info = JSON.parse(localStorage.getItem(_episode_key) || '{}');
+    let episode_info = {};
+    try {
+        episode_info = JSON.parse(localStorage.getItem(_episode_key) || '{}');
+    } catch (error) {
+        console.warn('[手动匹配] 剧集缓存损坏，已忽略:', error);
+        localStorage.removeItem(_episode_key);
+    }
     const { animeOriginalTitle } = episode_info;
     if (animeOriginalTitle) {
         e.target.setAttribute(attrKey, '1');
@@ -208,7 +238,7 @@ function doDanmakuAnimeSelect(value, index, option) {
     if (apiSourceDiv) apiSourceDiv.innerText = `来源: ${anime.apiName}`;
 }
 
-function doDanmakuSwitchEpisode() {
+async function doDanmakuSwitchEpisode() {
     const animeSelect = getById(eleIds.danmakuAnimeSelect);
     const episodeNumSelect = getById(eleIds.danmakuEpisodeNumSelect);
     if (!animeSelect || !episodeNumSelect) return;
@@ -290,27 +320,27 @@ function doDanmakuSwitchEpisode() {
     window.ede.previous_episode_info = { ...window.ede.episode_info };
 
     console.log('手动匹配成功，直接加载所选弹幕:', episodeInfo);
-    window.ede.loading = false;
+    const session = beginLoadSession(window.ede);
     window.ede.onlineDanmakuOk = true;
-    fetchComment(episodeInfo.episodeId)
-        .then((comments) => {
-            if (!comments?.length) throw new Error('所选剧集没有可用弹幕');
-            window.ede.danmuCache[episodeInfo.episodeId] = comments;
-            return createDanmaku(comments, createDanmakuHooks);
-        })
-        .then(() => {
-            const ctr = getById(eleIds.danmakuCtr);
-            if (ctr) ctr.style.opacity = '1';
-            appendvideoOsdDanmakuInfo(window.ede.commentsParsed.length);
-        })
-        .catch((error) => {
+    closeEmbyDialog();
+    try {
+        const comments = await fetchComment(episodeInfo.episodeId, session.controller.signal);
+        assertLoadSession(window.ede, session);
+        if (!comments?.length) throw new Error('所选剧集没有可用弹幕');
+        window.ede.danmuCache[episodeInfo.episodeId] = comments;
+        await createDanmaku(comments, { ...createDanmakuHooks, session });
+        assertLoadSession(window.ede, session);
+        const ctr = getById(eleIds.danmakuCtr);
+        if (ctr) ctr.style.opacity = '1';
+        appendvideoOsdDanmakuInfo(window.ede.commentsParsed.length);
+    } catch (error) {
+        if (error?.name !== 'AbortError') {
             console.error('手动匹配弹幕加载失败:', error);
             embyToast({ text: `手动匹配弹幕加载失败: ${error.message || error}` });
-        })
-        .finally(() => {
-            window.ede.loading = false;
-        });
-    closeEmbyDialog();
+        }
+    } finally {
+        finishLoadSession(window.ede, session);
+    }
 }
 
 function bindManualMatchButtons() {
@@ -429,27 +459,46 @@ async function onEnterExtComment(e) {
 }
 
 async function addExtComments(extUrl, extComments) {
-    const episode_info = window.ede.episode_info;
-    const episodeId = episode_info?.episodeId || null;
-    const comments = window.ede.danmuCache?.[episodeId] || [];
-    if (!extComments) {
-        extComments = await fetchExtcommentActual(extUrl, comments);
+    const session = beginLoadSession(window.ede);
+    try {
+        const episode_info = window.ede.episode_info;
+        const episodeId = episode_info?.episodeId || null;
+        const comments = window.ede.danmuCache?.[episodeId] || [];
+        if (!extComments) {
+            extComments = await fetchExtcommentActual(
+                extUrl,
+                comments,
+                session.controller.signal,
+                session
+            );
+        }
+        assertLoadSession(window.ede, session);
+        if (extComments.length === 0) {
+            embyToast({ text: '附加弹幕不能为空!' });
+            return;
+        }
+        const extCommentCache = window.ede.extCommentCache?.[window.ede.itemId] || {};
+        const { comments: allComments, failedCount } = await aggregateExtComments(
+            comments,
+            objectEntries(extCommentCache),
+            fetchExtcommentActual,
+            session.controller.signal,
+            session
+        );
+        if (failedCount > 0) console.warn(`[附加弹幕] ${failedCount} 个来源聚合失败`);
+        await createDanmaku(allComments, { ...createDanmakuHooks, session });
+        assertLoadSession(window.ede, session);
+        const beforeLength = comments.length;
+        embyToast({
+            text: `此次附加总量: ${extComments.length}, 主源总量: ${beforeLength}, 聚合后总量: ${allComments.length}`,
+        });
+        console.log(`附加弹幕就位, 附加前总量: ${beforeLength}`);
+        buildExtUrlsDiv();
+    } catch (error) {
+        if (error?.name !== 'AbortError') console.error('[附加弹幕] 加载失败:', error);
+    } finally {
+        finishLoadSession(window.ede, session);
     }
-    if (extComments.length === 0) {
-        embyToast({ text: '附加弹幕不能为空!' });
-        return;
-    }
-    const allComments = comments.concat(extComments);
-    createDanmaku(allComments, createDanmakuHooks)
-        .then(() => {
-            const beforeLength = window.ede.commentsParsed.length - extComments.length;
-            embyToast({
-                text: `此次附加总量: ${extComments.length}, 附加前总量: ${beforeLength}, 附加后总量: ${allComments.length}`,
-            });
-            console.log(`附加弹幕就位, 附加前总量: ${beforeLength}`);
-            buildExtUrlsDiv();
-        })
-        .catch((err) => console.log(err));
 }
 
 function buildExtCommentDiv() {

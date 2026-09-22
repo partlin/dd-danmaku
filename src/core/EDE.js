@@ -18,6 +18,12 @@ export class EDE {
         this.commentsParsed = []; // 包含 comment 和 extComment 解析后全量
         this.extCommentCache = {}; // 只包含 extComment 未解析
         this.destroyIntervalIds = [];
+        this.viewGeneration = 0;
+        this.loadGeneration = 0;
+        this.activeLoadSession = null;
+        this.playbackBindings = new Map();
+        this.clockIntervalId = null;
+        this.listeningMedia = null;
         this.searchDanmakuOpts = {}; // 手动搜索变量
         this.appLogAspect = null; // 应用日志切面
         this.bangumiInfo = {};

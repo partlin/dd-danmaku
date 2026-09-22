@@ -29,7 +29,7 @@ export function filterMainEpisodes(episodes, animeId) {
  * @param {string[]} apiPriority
  * @returns {Promise<object|null>}
  */
-export async function tryMatchByTmdbId(itemInfoMap, apiConfigs, apiPriority) {
+export async function tryMatchByTmdbId(itemInfoMap, apiConfigs, apiPriority, signal) {
     const { seriesTmdbId, seasonNumber, episodeNumber, episode } = itemInfoMap;
     if (!seriesTmdbId) return null;
 
@@ -37,7 +37,7 @@ export async function tryMatchByTmdbId(itemInfoMap, apiConfigs, apiPriority) {
         const config = apiConfigs[apiKey];
         if (!config || !config.enabled || (apiKey === 'custom' && !config.prefix)) continue;
 
-        const animaInfo = await fetchSearchEpisodesByTmdbId(seriesTmdbId, config.prefix);
+        const animaInfo = await fetchSearchEpisodesByTmdbId(seriesTmdbId, config.prefix, signal);
         if (!animaInfo?.animes?.length) continue;
 
         const animes = animaInfo.animes;

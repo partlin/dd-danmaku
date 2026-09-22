@@ -3,6 +3,7 @@
  */
 
 import { fetchJson } from '../utils/fetch.js';
+import { isLoadSessionCurrent } from '../core/lifecycle.js';
 import { dandanplayApi } from '../config/api.js';
 
 /**
@@ -11,10 +12,11 @@ import { dandanplayApi } from '../config/api.js';
  * @param {string} prefix
  * @returns {Promise<object|null>}
  */
-export async function fetchSearchEpisodes(anime, episode, prefix) {
+export async function fetchSearchEpisodes(anime, episode, prefix, signal) {
     if (!anime) throw new Error('anime is required');
     const url = `${prefix}/search/episodes?anime=${encodeURIComponent(anime)}${episode ? `&episode=${episode}` : ''}`;
-    const searchResult = await fetchJson(url).catch((error) => {
+    const searchResult = await fetchJson(url, { signal }).catch((error) => {
+        if (error?.name === 'AbortError') throw error;
         console.error(`[API请求] search/episodes 查询失败: ${error.message}`);
         return null;
     });
@@ -27,10 +29,11 @@ export async function fetchSearchEpisodes(anime, episode, prefix) {
  * @param {string} prefix
  * @returns {Promise<object|null>}
  */
-export async function fetchSearchEpisodesByTmdbId(tmdbId, prefix) {
+export async function fetchSearchEpisodesByTmdbId(tmdbId, prefix, signal) {
     if (!tmdbId) return null;
     const url = `${prefix}/search/episodes?tmdbId=${encodeURIComponent(tmdbId)}`;
-    const searchResult = await fetchJson(url).catch((error) => {
+    const searchResult = await fetchJson(url, { signal }).catch((error) => {
+        if (error?.name === 'AbortError') throw error;
         console.error(`[API请求] search/episodes(tmdbId) 查询失败: ${error.message}`);
         return null;
     });
@@ -45,18 +48,18 @@ export async function fetchSearchEpisodesByTmdbId(tmdbId, prefix) {
  * @param {string} prefix
  * @returns {Promise<object|null>}
  */
-export async function fetchMatchApi(payload, prefix) {
+export async function fetchMatchApi(payload, prefix, signal) {
     const url = `${prefix}/match`;
     console.log(`[自动匹配] 尝试 match 接口`);
     try {
         const response = await fetch(url, {
             method: 'POST',
             headers: {
-                'Accept-Encoding': 'gzip',
                 Accept: 'application/json',
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify(payload),
+            signal,
         });
 
         if (!response.ok) {
@@ -74,6 +77,7 @@ export async function fetchMatchApi(payload, prefix) {
         }
         return matchResult;
     } catch (error) {
+        if (error?.name === 'AbortError') throw error;
         console.warn(`[自动匹配] match 失败:`, error.message || error);
         return null;
     }
@@ -84,15 +88,16 @@ export async function fetchMatchApi(payload, prefix) {
  * @param {string|number} episodeId
  * @returns {Promise<object[]|null>}
  */
-export async function fetchComment(episodeId) {
+export async function fetchComment(episodeId, signal) {
     const prefix = window.ede?.episode_info?.apiPrefix || dandanplayApi.prefix;
     const url = `${prefix}/comment/${episodeId}?withRelated=true&chConvert=${window.ede?.chConvert ?? 1}`;
-    return fetchJson(url)
+    return fetchJson(url, { signal })
         .then((data) => {
             console.log('[获取]弹幕成功: ' + data.comments.length);
             return data.comments;
         })
         .catch((error) => {
+            if (error?.name === 'AbortError') throw error;
             console.log('[获取]弹幕失败:', error);
             return null;
         });
@@ -104,11 +109,14 @@ export async function fetchComment(episodeId) {
  * @param {object[]} [comments] - 已有弹幕，用于差集
  * @returns {Promise<object[]|null>}
  */
-export async function fetchExtcommentActual(extUrl, comments) {
+export async function fetchExtcommentActual(extUrl, comments, signal, session) {
     if (!extUrl) return null;
-    let extComments = (await fetchJson(dandanplayApi.getExtcomment(extUrl)))?.comments || [];
+    let extComments = (await fetchJson(dandanplayApi.getExtcomment(extUrl), { signal }))?.comments || [];
     if (extComments.length === 0) {
-        extComments = (await fetchJson(dandanplayApi.getExtcomment(extUrl)))?.comments || [];
+        extComments = (await fetchJson(dandanplayApi.getExtcomment(extUrl), { signal }))?.comments || [];
+    }
+    if (session && !isLoadSessionCurrent(window.ede, session)) {
+        throw new DOMException('Stale external comment request', 'AbortError');
     }
     extComments.forEach((c) => (c.fromUrl = extUrl));
     const itemId = window.ede?.itemId;

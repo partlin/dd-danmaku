@@ -20,8 +20,8 @@ import {
  * @param {function} [appendvideoOsdDanmakuInfo] - 匹配失败时回调
  * @returns {Promise<object|null>}
  */
-export async function getEpisodeInfo(is_auto = true, appendvideoOsdDanmakuInfo) {
-    const itemInfoMap = await getMapByEmbyItemInfo();
+export async function getEpisodeInfo(is_auto = true, appendvideoOsdDanmakuInfo, signal, session) {
+    const itemInfoMap = await getMapByEmbyItemInfo(session);
     if (!itemInfoMap) return null;
 
     const { _episode_key, animeId, episode, seriesOrMovieId, animeName } = itemInfoMap;
@@ -117,7 +117,7 @@ export async function getEpisodeInfo(is_auto = true, appendvideoOsdDanmakuInfo) 
         }
 
         if (predictedEpisodeId) {
-            const comments = await fetchComment(predictedEpisodeId);
+            const comments = await fetchComment(predictedEpisodeId, signal);
             if (comments?.length > 0) {
                 return {
                     ...itemInfoMap,
@@ -137,7 +137,7 @@ export async function getEpisodeInfo(is_auto = true, appendvideoOsdDanmakuInfo) 
         }
     }
 
-    const res = await searchEpisodes(itemInfoMap);
+    const res = await searchEpisodes(itemInfoMap, signal);
 
     if (!lsGetItem(lsKeys.useOfficialApi.id) && !lsGetItem(lsKeys.useCustomApi.id)) {
         return null;

@@ -67,7 +67,10 @@ export function danmakuDensityLevelFilter(comments) {
             arr_comments[i].push(element);
         }
     }
-    return arr_comments.flat();
+    return arr_comments.reduce((result, group) => {
+        if (group) result.push(...group);
+        return result;
+    }, []);
 }
 
 /** 通过屏蔽关键词过滤弹幕 */
@@ -80,15 +83,19 @@ export function danmakuKeywordsFilter(comments) {
     if (keywords.length === 0) return comments;
 
     const cKeys = ['text', ...Object.keys(showSource)];
+    const matchers = keywords.map((keyword) => {
+        try {
+            const regex = new RegExp(keyword);
+            return (value) => regex.test(value);
+        } catch (error) {
+            return (value) => value.includes(keyword);
+        }
+    });
     return comments.filter(
         (comment) =>
-            !keywords.some((keyword) => {
-                try {
-                    return cKeys.some((key) => new RegExp(keyword).test(comment[key] || ''));
-                } catch (error) {
-                    return cKeys.some((key) => (comment[key] || '').includes(keyword));
-                }
-            })
+            !matchers.some((matches) =>
+                cKeys.some((key) => matches(String(comment[key] || '')))
+            )
     );
 }
 
@@ -97,11 +104,11 @@ export function danmakuMergeSimilar(comments, threshold = 50, timeWindow = 15) {
     if (!lsGetItem(lsKeys.mergeSimilarEnable.id)) return comments;
 
     const mergedComments = [];
-    const mergedIndexes = [];
+    const mergedIndexes = new Set();
     const startTime = Date.now();
 
     for (let i = 0; i < comments.length; i++) {
-        if (mergedIndexes.includes(i)) continue;
+        if (mergedIndexes.has(i)) continue;
 
         let mergedComment = { ...comments[i] };
         let count = 1;
@@ -112,11 +119,11 @@ export function danmakuMergeSimilar(comments, threshold = 50, timeWindow = 15) {
             j < comments.length && Math.abs(comments[j].time - comments[i].time) <= timeWindow;
             j++
         ) {
-            if (mergedIndexes.includes(j)) continue;
+            if (mergedIndexes.has(j)) continue;
             const sim = similarityPercentage(mergedComment.text || '', comments[j].text || '');
             if (sim >= threshold) {
                 count++;
-                mergedIndexes.push(j);
+                mergedIndexes.add(j);
                 totalSimilarity += sim;
             }
         }

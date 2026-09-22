@@ -13,6 +13,7 @@ export {
     danmakuAutoFilterCancel,
 } from './filter.js';
 export { danmakuParser, getCommentStyle } from './parser.js';
+export { dedupeComments, aggregateExtComments } from './aggregate.js';
 export { buildProgressBarChart } from './chart.js';
 export { toastByDanmaku } from './toast.js';
 export { createDanmaku, loadDanmaku, loadOnlineDanmaku, getCommentsByPluginApi } from './loader.js';

@@ -278,21 +278,35 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    */
   async function playbackEventsRefresh(eventsMap) {
     if (typeof require !== 'function') return;
+    var ede = window.ede;
+    var viewGeneration = ede === null || ede === void 0 ? void 0 : ede.viewGeneration;
     try {
       var _playbackManager$getC;
       var _await$require = await require(['playbackManager', 'events']),
         _await$require2 = _slicedToArray(_await$require, 2),
         playbackManager = _await$require2[0],
         events = _await$require2[1];
+      if (!ede || window.ede !== ede || ede.viewGeneration !== viewGeneration) return;
       var player = playbackManager === null || playbackManager === void 0 || (_playbackManager$getC = playbackManager.getCurrentPlayer) === null || _playbackManager$getC === void 0 ? void 0 : _playbackManager$getC.call(playbackManager);
       if (!player) return;
+      if (!ede.playbackBindings) ede.playbackBindings = new Map();
       objectEntries(eventsMap).forEach(function (_ref3) {
-        var _events$off, _events$on;
+        var _events$on;
         var _ref4 = _slicedToArray(_ref3, 2),
           eventName = _ref4[0],
           fn = _ref4[1];
-        (_events$off = events.off) === null || _events$off === void 0 || _events$off.call(events, player, eventName, fn);
+        var previous = ede.playbackBindings.get(eventName);
+        if (previous) {
+          var _previous$events, _previous$events$off;
+          (_previous$events = previous.events) === null || _previous$events === void 0 || (_previous$events$off = _previous$events.off) === null || _previous$events$off === void 0 || _previous$events$off.call(_previous$events, previous.player, eventName, previous.fn);
+        }
         (_events$on = events.on) === null || _events$on === void 0 || _events$on.call(events, player, eventName, fn);
+        ede.playbackBindings.set(eventName, {
+          events: events,
+          player: player,
+          eventName: eventName,
+          fn: fn
+        });
       });
     } catch (e) {
       console.warn('playbackEventsRefresh:', e);
@@ -327,7 +341,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
   var mediaQueryStr = 'video';
 
   /** emoji 正则，用于弹幕过滤 */
-  var emojiRegex = /(?:[\u2600-\u27BF]|\uD83C[\uDDE6-\uDDFF\uDF00-\uDFFF]|\uD83D[\uDC00-\uDE4F\uDE80-\uDEFF]|\uD83E[\uDD00-\uDDFF])/g;
+  var emojiRegex = /(?:[\u2600-\u27BF]|\uD83C[\uDDE6-\uDDFF\uDF00-\uDFFF]|\uD83D[\uDC00-\uDE4F\uDE80-\uDEFF]|\uD83E[\uDD00-\uDDFF])/;
 
   /**
    * DOM 工具函数
@@ -387,40 +401,64 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var destroyIntervalIds = arguments.length > 4 && arguments[4] !== undefined ? arguments[4] : [];
     var intervalId = null;
     var timeoutId = null;
+    var settled = false;
     var isSelector = typeof target === 'string';
     var elementMark = isSelector ? target : (_target$element = target.element) === null || _target$element === void 0 ? void 0 : _target$element.tagName;
+    var registry = destroyIntervalIds && Array.isArray(destroyIntervalIds) ? destroyIntervalIds : null;
+    var resolvePromise;
+    var handle = {
+      cancel: function cancel() {
+        if (settled) return;
+        settled = true;
+        clearInterval(intervalId);
+        clearTimeout(timeoutId);
+        removeHandle();
+        resolvePromise(null);
+      }
+    };
+    function removeHandle() {
+      if (!registry) return;
+      var index = registry.indexOf(handle);
+      if (index >= 0) registry.splice(index, 1);
+    }
+    function findElement() {
+      if (isSelector) return document.querySelector(target);
+      if (!(target !== null && target !== void 0 && target.element)) return null;
+      return target.needParent ? target.element.parentNode : target.element;
+    }
     var promise = new Promise(function (resolve, reject) {
+      resolvePromise = resolve;
       function checkElement() {
-        var element = null;
-        if (isSelector) {
-          element = document.querySelector(target);
-        } else if (target !== null && target !== void 0 && target.element) {
-          if (target.needParent) {
-            element = target.element.parentNode;
-          } else {
-            element = target.element;
-          }
-        }
+        if (settled) return;
+        var element = findElement();
         if (element) {
+          settled = true;
           clearInterval(intervalId);
           clearTimeout(timeoutId);
-          if (typeof callback === 'function') {
-            callback(element);
+          removeHandle();
+          try {
+            if (typeof callback === 'function') callback(element);
+            resolve(element);
+          } catch (error) {
+            reject(error);
           }
-          resolve(element);
         }
       }
+      if (registry) registry.push(handle);
+      checkElement();
+      if (settled) return;
       intervalId = setInterval(checkElement, interval);
-      if (destroyIntervalIds && Array.isArray(destroyIntervalIds)) {
-        destroyIntervalIds.push(intervalId);
-      }
       if (timeout > 0) {
         timeoutId = setTimeout(function () {
+          if (settled) return;
+          settled = true;
           clearInterval(intervalId);
+          removeHandle();
           reject(new Error("Element [".concat(elementMark, "] not found within ").concat(timeout, "ms")));
         }, timeout);
       }
     });
+    promise.cancel = handle.cancel;
     return promise;
   }
 
@@ -1160,13 +1198,25 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       return defaultValue;
     }
     if (Array.isArray(defaultValue) || _typeof(defaultValue) === 'object' && defaultValue !== null) {
-      return JSON.parse(item);
+      try {
+        var parsed = JSON.parse(item);
+        if (Array.isArray(defaultValue) && !Array.isArray(parsed)) throw new TypeError('Expected array');
+        return parsed;
+      } catch (error) {
+        console.warn("[\u8BBE\u7F6E] ".concat(id, " \u5185\u5BB9\u635F\u574F\uFF0C\u5DF2\u6062\u590D\u9ED8\u8BA4\u503C:"), error);
+        localStorage.removeItem(id);
+        return defaultValue;
+      }
     }
     if (typeof defaultValue === 'boolean') {
       return item === 'true';
     }
     if (typeof defaultValue === 'number') {
-      return parseFloat(item);
+      var _parsed = parseFloat(item);
+      if (Number.isFinite(_parsed)) return _parsed;
+      console.warn("[\u8BBE\u7F6E] ".concat(id, " \u4E0D\u662F\u6709\u6548\u6570\u5B57\uFF0C\u5DF2\u6062\u590D\u9ED8\u8BA4\u503C"));
+      localStorage.removeItem(id);
+      return defaultValue;
     }
     return item;
   }
@@ -1291,6 +1341,12 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     this.commentsParsed = []; // 包含 comment 和 extComment 解析后全量
     this.extCommentCache = {}; // 只包含 extComment 未解析
     this.destroyIntervalIds = [];
+    this.viewGeneration = 0;
+    this.loadGeneration = 0;
+    this.activeLoadSession = null;
+    this.playbackBindings = new Map();
+    this.clockIntervalId = null;
+    this.listeningMedia = null;
     this.searchDanmakuOpts = {}; // 手动搜索变量
     this.appLogAspect = null; // 应用日志切面
     this.bangumiInfo = {};
@@ -1423,9 +1479,77 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     }]);
   }();
 
-  /**
-   * core 模块统一导出
-   */
+  function cancelActiveLoad(ede) {
+    var _ede$activeLoadSessio;
+    if (!ede) return;
+    (_ede$activeLoadSessio = ede.activeLoadSession) === null || _ede$activeLoadSessio === void 0 || (_ede$activeLoadSessio = _ede$activeLoadSessio.controller) === null || _ede$activeLoadSessio === void 0 || _ede$activeLoadSessio.abort();
+    ede.activeLoadSession = null;
+    ede.loading = false;
+  }
+  function createAbortController() {
+    if (typeof AbortController === 'function') return new AbortController();
+    return {
+      signal: undefined,
+      aborted: false,
+      abort: function abort() {
+        this.aborted = true;
+      }
+    };
+  }
+  function startViewSession(ede) {
+    var itemId = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : '';
+    if (!ede) return;
+    cancelActiveLoad(ede);
+    ede.viewGeneration = (ede.viewGeneration || 0) + 1;
+    ede.itemId = itemId || '';
+  }
+  function syncPlaybackItemSession(ede, state) {
+    var _state$NowPlayingItem, _state$NowPlayingItem2;
+    var itemId = (state === null || state === void 0 || (_state$NowPlayingItem = state.NowPlayingItem) === null || _state$NowPlayingItem === void 0 ? void 0 : _state$NowPlayingItem.Id) || (state === null || state === void 0 || (_state$NowPlayingItem2 = state.NowPlayingItem) === null || _state$NowPlayingItem2 === void 0 ? void 0 : _state$NowPlayingItem2.ItemId);
+    if (!ede || !itemId || ede.itemId === itemId) return false;
+    startViewSession(ede, itemId);
+    return true;
+  }
+  function beginLoadSession(ede) {
+    cancelActiveLoad(ede);
+    var session = {
+      viewGeneration: ede.viewGeneration,
+      loadGeneration: (ede.loadGeneration || 0) + 1,
+      itemId: ede.itemId,
+      controller: createAbortController()
+    };
+    ede.loadGeneration = session.loadGeneration;
+    ede.activeLoadSession = session;
+    ede.loading = true;
+    return session;
+  }
+  function isLoadSessionCurrent(ede, session) {
+    var _session$controller$s;
+    if (!session) return true;
+    return Boolean(ede && ede.activeLoadSession === session && !session.controller.aborted && !((_session$controller$s = session.controller.signal) !== null && _session$controller$s !== void 0 && _session$controller$s.aborted) && ede.viewGeneration === session.viewGeneration && ede.itemId === session.itemId);
+  }
+  function assertLoadSession(ede, session) {
+    if (!isLoadSessionCurrent(ede, session)) {
+      throw new DOMException('Stale playback load', 'AbortError');
+    }
+  }
+  function finishLoadSession(ede, session) {
+    if ((ede === null || ede === void 0 ? void 0 : ede.activeLoadSession) !== session) return;
+    ede.activeLoadSession = null;
+    ede.loading = false;
+  }
+  function clearPlaybackBindings(ede) {
+    if (!(ede !== null && ede !== void 0 && ede.playbackBindings)) return;
+    ede.playbackBindings.forEach(function (_ref) {
+      var _events$off;
+      var events = _ref.events,
+        player = _ref.player,
+        eventName = _ref.eventName,
+        fn = _ref.fn;
+      events === null || events === void 0 || (_events$off = events.off) === null || _events$off === void 0 || _events$off.call(events, player, eventName, fn);
+    });
+    ede.playbackBindings.clear();
+  }
 
   /**
    * 清理所有由 waitForElement 创建的 interval
@@ -1434,8 +1558,8 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
   function destroyAllInterval(ede) {
     var target = ede !== null && ede !== void 0 ? ede : window.ede;
     if (target !== null && target !== void 0 && target.destroyIntervalIds) {
-      target.destroyIntervalIds.forEach(function (id) {
-        return clearInterval(id);
+      _toConsumableArray(target.destroyIntervalIds).forEach(function (handle) {
+        if (typeof (handle === null || handle === void 0 ? void 0 : handle.cancel) === 'function') handle.cancel();else clearInterval(handle);
       });
       target.destroyIntervalIds = [];
     }
@@ -2193,8 +2317,16 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var showSourceIds = lsGetItem(lsKeys.showSource.id) || [];
     return $obj.map(function ($comment) {
       var _values$, _danmakuSource$DanDan;
-      var p = $comment.p;
+      var p = $comment === null || $comment === void 0 ? void 0 : $comment.p;
+      if (typeof p !== 'string' || typeof ($comment === null || $comment === void 0 ? void 0 : $comment.m) !== 'string') {
+        console.warn('[弹幕解析] 跳过格式损坏的记录:', $comment);
+        return null;
+      }
       var values = p.split(',');
+      if (values.length < 4 || !Number.isFinite(Number(values[0]))) {
+        console.warn('[弹幕解析] 跳过参数损坏的记录:', $comment);
+        return null;
+      }
       var mode = {
         6: 'ltr',
         1: 'rtl',
@@ -2202,7 +2334,9 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         4: 'bottom'
       }[values[1]];
       if (!mode) return null;
-      var baseColor = Number(values[2]).toString(16).padStart(6, '0');
+      var colorNumber = Number(values[2]);
+      if (!Number.isFinite(colorNumber)) return null;
+      var baseColor = colorNumber.toString(16).padStart(6, '0');
       var color = "".concat(baseColor).concat(fontOpacity);
       var shadowColor = baseColor === '000000' ? "#ffffff".concat(fontOpacity) : "#000000".concat(fontOpacity);
       var sourceUidMatches = (_values$ = values[3]) === null || _values$ === void 0 ? void 0 : _values$.match(sourceUidReg);
@@ -2499,7 +2633,10 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         arr_comments[i].push(element);
       }
     }
-    return arr_comments.flat();
+    return arr_comments.reduce(function (result, group) {
+      if (group) result.push.apply(result, _toConsumableArray(group));
+      return result;
+    }, []);
   }
 
   /** 通过屏蔽关键词过滤弹幕 */
@@ -2512,17 +2649,23 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     });
     if (keywords.length === 0) return comments;
     var cKeys = ['text'].concat(_toConsumableArray(Object.keys(showSource)));
+    var matchers = keywords.map(function (keyword) {
+      try {
+        var regex = new RegExp(keyword);
+        return function (value) {
+          return regex.test(value);
+        };
+      } catch (error) {
+        return function (value) {
+          return value.includes(keyword);
+        };
+      }
+    });
     return comments.filter(function (comment) {
-      return !keywords.some(function (keyword) {
-        try {
-          return cKeys.some(function (key) {
-            return new RegExp(keyword).test(comment[key] || '');
-          });
-        } catch (error) {
-          return cKeys.some(function (key) {
-            return (comment[key] || '').includes(keyword);
-          });
-        }
+      return !matchers.some(function (matches) {
+        return cKeys.some(function (key) {
+          return matches(String(comment[key] || ''));
+        });
       });
     });
   }
@@ -2533,19 +2676,19 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var timeWindow = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : 15;
     if (!lsGetItem(lsKeys.mergeSimilarEnable.id)) return comments;
     var mergedComments = [];
-    var mergedIndexes = [];
+    var mergedIndexes = new Set();
     var startTime = Date.now();
     for (var i = 0; i < comments.length; i++) {
-      if (mergedIndexes.includes(i)) continue;
+      if (mergedIndexes.has(i)) continue;
       var mergedComment = _objectSpread2({}, comments[i]);
       var count = 1;
       var totalSimilarity = 0;
       for (var j = i + 1; j < comments.length && Math.abs(comments[j].time - comments[i].time) <= timeWindow; j++) {
-        if (mergedIndexes.includes(j)) continue;
+        if (mergedIndexes.has(j)) continue;
         var sim = similarityPercentage(mergedComment.text || '', comments[j].text || '');
         if (sim >= threshold) {
           count++;
-          mergedIndexes.push(j);
+          mergedIndexes.add(j);
           totalSimilarity += sim;
         }
       }
@@ -2689,13 +2832,18 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * 根据当前播放项获取匹配信息映射
    * @returns {Promise<object|null>}
    */
-  async function getMapByEmbyItemInfo() {
+  async function getMapByEmbyItemInfo(session) {
     var _window$ede;
     var item = await getEmbyItemInfo();
+    if (session) assertLoadSession(window.ede, session);
     if (!item && (_window$ede = window.ede) !== null && _window$ede !== void 0 && _window$ede.itemId) {
       item = await fatchEmbyItemInfo(window.ede.itemId);
+      if (session) assertLoadSession(window.ede, session);
     }
     if (!item) return null;
+    if (session !== null && session !== void 0 && session.itemId && item.Id !== session.itemId) {
+      throw new DOMException('Playback item changed during metadata request', 'AbortError');
+    }
     var getProviderId = function getProviderId(providerIds, key) {
       if (!providerIds || _typeof(providerIds) !== 'object') return null;
       var k = Object.keys(providerIds).find(function (kk) {
@@ -2707,6 +2855,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     if (item.Type === 'Episode' && item.SeriesId) {
       try {
         var seriesInfo = await ApiClient.getItem(ApiClient.getCurrentUserId(), item.SeriesId);
+        if (session) assertLoadSession(window.ede, session);
         seriesTmdbId = getProviderId(seriesInfo === null || seriesInfo === void 0 ? void 0 : seriesInfo.ProviderIds, 'Tmdb');
       } catch (e) {
         console.warn('[tmdbId] 获取剧集 tmdbId 失败:', e);
@@ -2717,6 +2866,9 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     if (!['Episode', 'Movie'].includes(item.Type)) {
       console.error('不支持的类型');
       return null;
+    }
+    if (session && !session.itemId) {
+      session.itemId = item.Id;
     }
     window.ede.itemId = item.Id;
     var _id;
@@ -2752,6 +2904,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     if (!item.MediaSources || item.MediaSources.length === 0) {
       try {
         var fullItem = await fatchEmbyItemInfo(item.Id);
+        if (session) assertLoadSession(window.ede, session);
         if (fullItem && fullItem.MediaSources && fullItem.MediaSources.length > 0) {
           item = fullItem;
         }
@@ -2800,25 +2953,24 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
   /**
    * 封装 fetch，支持 JSON 请求
    * @param {string} url
-   * @param {object} [opts] - { token, headers, body, method }
+   * @param {object} [opts] - { token, headers, body, method, signal }
    * @returns {Promise<object>}
    */
   async function fetchJson(url) {
     var opts = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
     var token = opts.token,
       headers = opts.headers,
-      body = opts.body;
+      body = opts.body,
+      signal = opts.signal;
     var _opts$method = opts.method,
       method = _opts$method === void 0 ? 'GET' : _opts$method;
     if (method === 'GET' && body) {
       method = 'POST';
     }
     var requestHeaders = {
-      'Accept-Encoding': 'gzip',
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      'User-Agent': navigator.userAgent
+      Accept: 'application/json'
     };
+    if (body) requestHeaders['Content-Type'] = 'application/json';
     if (token) {
       requestHeaders.Authorization = "Bearer ".concat(token);
     }
@@ -2829,7 +2981,8 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var response = await fetch(url, {
       method: method,
       headers: requestHeaders,
-      body: requestBody
+      body: requestBody,
+      signal: signal
     });
     if (!response.ok) {
       throw new Error("HTTP error! Status: ".concat(response.status));
@@ -2857,10 +3010,13 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {string} prefix
    * @returns {Promise<object|null>}
    */
-  async function fetchSearchEpisodes(anime, episode, prefix) {
+  async function fetchSearchEpisodes(anime, episode, prefix, signal) {
     if (!anime) throw new Error('anime is required');
     var url = "".concat(prefix, "/search/episodes?anime=").concat(encodeURIComponent(anime)).concat(episode ? "&episode=".concat(episode) : '');
-    var searchResult = await fetchJson(url).catch(function (error) {
+    var searchResult = await fetchJson(url, {
+      signal: signal
+    }).catch(function (error) {
+      if ((error === null || error === void 0 ? void 0 : error.name) === 'AbortError') throw error;
       console.error("[API\u8BF7\u6C42] search/episodes \u67E5\u8BE2\u5931\u8D25: ".concat(error.message));
       return null;
     });
@@ -2873,11 +3029,14 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {string} prefix
    * @returns {Promise<object|null>}
    */
-  async function fetchSearchEpisodesByTmdbId(tmdbId, prefix) {
+  async function fetchSearchEpisodesByTmdbId(tmdbId, prefix, signal) {
     var _searchResult$animes;
     if (!tmdbId) return null;
     var url = "".concat(prefix, "/search/episodes?tmdbId=").concat(encodeURIComponent(tmdbId));
-    var searchResult = await fetchJson(url).catch(function (error) {
+    var searchResult = await fetchJson(url, {
+      signal: signal
+    }).catch(function (error) {
+      if ((error === null || error === void 0 ? void 0 : error.name) === 'AbortError') throw error;
       console.error("[API\u8BF7\u6C42] search/episodes(tmdbId) \u67E5\u8BE2\u5931\u8D25: ".concat(error.message));
       return null;
     });
@@ -2892,18 +3051,18 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {string} prefix
    * @returns {Promise<object|null>}
    */
-  async function fetchMatchApi(payload, prefix) {
+  async function fetchMatchApi(payload, prefix, signal) {
     var url = "".concat(prefix, "/match");
     console.log("[\u81EA\u52A8\u5339\u914D] \u5C1D\u8BD5 match \u63A5\u53E3");
     try {
       var response = await fetch(url, {
         method: 'POST',
         headers: {
-          'Accept-Encoding': 'gzip',
           Accept: 'application/json',
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: signal
       });
       if (!response.ok) {
         var responseText = await response.text();
@@ -2918,6 +3077,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       }
       return matchResult;
     } catch (error) {
+      if ((error === null || error === void 0 ? void 0 : error.name) === 'AbortError') throw error;
       console.warn("[\u81EA\u52A8\u5339\u914D] match \u5931\u8D25:", error.message || error);
       return null;
     }
@@ -2928,14 +3088,17 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {string|number} episodeId
    * @returns {Promise<object[]|null>}
    */
-  async function fetchComment(episodeId) {
+  async function fetchComment(episodeId, signal) {
     var _window$ede, _window$ede$chConvert, _window$ede2;
     var prefix = ((_window$ede = window.ede) === null || _window$ede === void 0 || (_window$ede = _window$ede.episode_info) === null || _window$ede === void 0 ? void 0 : _window$ede.apiPrefix) || dandanplayApi.prefix;
     var url = "".concat(prefix, "/comment/").concat(episodeId, "?withRelated=true&chConvert=").concat((_window$ede$chConvert = (_window$ede2 = window.ede) === null || _window$ede2 === void 0 ? void 0 : _window$ede2.chConvert) !== null && _window$ede$chConvert !== void 0 ? _window$ede$chConvert : 1);
-    return fetchJson(url).then(function (data) {
+    return fetchJson(url, {
+      signal: signal
+    }).then(function (data) {
       console.log('[获取]弹幕成功: ' + data.comments.length);
       return data.comments;
     }).catch(function (error) {
+      if ((error === null || error === void 0 ? void 0 : error.name) === 'AbortError') throw error;
       console.log('[获取]弹幕失败:', error);
       return null;
     });
@@ -2947,13 +3110,20 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {object[]} [comments] - 已有弹幕，用于差集
    * @returns {Promise<object[]|null>}
    */
-  async function fetchExtcommentActual(extUrl, comments) {
+  async function fetchExtcommentActual(extUrl, comments, signal, session) {
     var _await$fetchJson, _window$ede3;
     if (!extUrl) return null;
-    var extComments = ((_await$fetchJson = await fetchJson(dandanplayApi.getExtcomment(extUrl))) === null || _await$fetchJson === void 0 ? void 0 : _await$fetchJson.comments) || [];
+    var extComments = ((_await$fetchJson = await fetchJson(dandanplayApi.getExtcomment(extUrl), {
+      signal: signal
+    })) === null || _await$fetchJson === void 0 ? void 0 : _await$fetchJson.comments) || [];
     if (extComments.length === 0) {
       var _await$fetchJson2;
-      extComments = ((_await$fetchJson2 = await fetchJson(dandanplayApi.getExtcomment(extUrl))) === null || _await$fetchJson2 === void 0 ? void 0 : _await$fetchJson2.comments) || [];
+      extComments = ((_await$fetchJson2 = await fetchJson(dandanplayApi.getExtcomment(extUrl), {
+        signal: signal
+      })) === null || _await$fetchJson2 === void 0 ? void 0 : _await$fetchJson2.comments) || [];
+    }
+    if (session && !isLoadSessionCurrent(window.ede, session)) {
+      throw new DOMException('Stale external comment request', 'AbortError');
     }
     extComments.forEach(function (c) {
       return c.fromUrl = extUrl;
@@ -3062,7 +3232,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {string[]} apiPriority
    * @returns {Promise<object|null>}
    */
-  async function tryMatchByTmdbId(itemInfoMap, apiConfigs, apiPriority) {
+  async function tryMatchByTmdbId(itemInfoMap, apiConfigs, apiPriority, signal) {
     var seriesTmdbId = itemInfoMap.seriesTmdbId,
       seasonNumber = itemInfoMap.seasonNumber,
       episodeNumber = itemInfoMap.episodeNumber,
@@ -3076,7 +3246,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         var apiKey = _step.value;
         var config = apiConfigs[apiKey];
         if (!config || !config.enabled || apiKey === 'custom' && !config.prefix) continue;
-        var animaInfo = await fetchSearchEpisodesByTmdbId(seriesTmdbId, config.prefix);
+        var animaInfo = await fetchSearchEpisodesByTmdbId(seriesTmdbId, config.prefix, signal);
         if (!(animaInfo !== null && animaInfo !== void 0 && (_animaInfo$animes = animaInfo.animes) !== null && _animaInfo$animes !== void 0 && _animaInfo$animes.length)) continue;
         var animes = animaInfo.animes;
         if (episode === 'movie') {
@@ -3272,12 +3442,12 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {string} prefix - API prefix
    * @returns {Promise<object|null>}
    */
-  async function autoFailback(animeName, episodeIndex, seriesOrMovieId, prefix) {
-    var rvt = await movieAutoFailback(animeName, episodeIndex, prefix);
+  async function autoFailback(animeName, episodeIndex, seriesOrMovieId, prefix, signal) {
+    var rvt = await movieAutoFailback(animeName, episodeIndex, prefix, signal);
     if (rvt) return rvt;
     var seriesOrMovieInfo = await ApiClient.getItem(ApiClient.getCurrentUserId(), seriesOrMovieId);
     var animeOriginalTitle = seriesOrMovieInfo === null || seriesOrMovieInfo === void 0 ? void 0 : seriesOrMovieInfo.OriginalTitle;
-    return oriTitleAutoFailback(animeName, episodeIndex, animeOriginalTitle, prefix);
+    return oriTitleAutoFailback(animeName, episodeIndex, animeOriginalTitle, prefix, signal);
   }
 
   /**
@@ -3287,11 +3457,11 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {string} prefix
    * @returns {Promise<object|null>}
    */
-  async function oriTitleAutoFailback(animeName, episodeIndex, animeOriginalTitle, prefix) {
+  async function oriTitleAutoFailback(animeName, episodeIndex, animeOriginalTitle, prefix, signal) {
     var _animaInfo$animes;
     if (!animeOriginalTitle || !prefix) return null;
     console.log("\u6807\u9898\u540D: ".concat(animeName, ",\u81EA\u52A8\u5339\u914D\u672A\u67E5\u8BE2\u5230\u7ED3\u679C,\u5C06\u4F7F\u7528\u539F\u6807\u9898\u540D,\u91CD\u8BD5\u4E00\u6B21"));
-    var animaInfo = await fetchSearchEpisodes(animeOriginalTitle, episodeIndex, prefix);
+    var animaInfo = await fetchSearchEpisodes(animeOriginalTitle, episodeIndex, prefix, signal);
     if (!(animaInfo !== null && animaInfo !== void 0 && (_animaInfo$animes = animaInfo.animes) !== null && _animaInfo$animes !== void 0 && _animaInfo$animes.length)) return null;
     console.log("\u4F7F\u7528\u539F\u6807\u9898\u540D: ".concat(animeOriginalTitle, ",\u81EA\u52A8\u5339\u914D\u6210\u529F"));
     return {
@@ -3308,11 +3478,11 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {string} prefix
    * @returns {Promise<object|null>}
    */
-  async function movieAutoFailback(animeName, episodeIndex, prefix) {
+  async function movieAutoFailback(animeName, episodeIndex, prefix, signal) {
     var _animaInfo$animes2;
     if (!prefix) return null;
     console.log("\u81EA\u52A8\u5339\u914D\u672A\u67E5\u8BE2\u5230\u7ED3\u679C,\u53EF\u80FD\u4E3A\u975E\u756A\u5267,\u5C06\u79FB\u9664\u7AE0\u8282\u8FC7\u6EE4,\u91CD\u8BD5\u4E00\u6B21");
-    var animaInfo = await fetchSearchEpisodes(animeName, null, prefix);
+    var animaInfo = await fetchSearchEpisodes(animeName, null, prefix, signal);
     if (!(animaInfo !== null && animaInfo !== void 0 && (_animaInfo$animes2 = animaInfo.animes) !== null && _animaInfo$animes2 !== void 0 && _animaInfo$animes2.length)) return null;
     console.log("\u79FB\u9664\u7AE0\u8282\u8FC7\u6EE4,\u81EA\u52A8\u5339\u914D\u6210\u529F,\u8F6C\u6362\u4E3A\u76EE\u6807\u7AE0\u8282\u7D22\u5F15 0");
     var anime = animaInfo.animes[0];
@@ -3413,31 +3583,27 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     return score;
   }
 
-  /**
-   * 简化的 MD5 实现（与 ede.js 保持一致）
-   * 注：当前为 mock 实现，返回固定哈希，实际匹配依赖弹弹 play 服务端
-   */
-  var SparkMD5 = {
-    ArrayBuffer: function (_ArrayBuffer) {
-      function ArrayBuffer() {
-        return _ArrayBuffer.apply(this, arguments);
-      }
-      ArrayBuffer.toString = function () {
-        return _ArrayBuffer.toString();
-      };
-      return ArrayBuffer;
-    }(function () {
-      this._buff = new DataView(new ArrayBuffer(0));
-      this._length = 0;
-      this._hash = [1732584193, -271733879, -1732584194, 271733878];
-    })
-  };
-  SparkMD5.ArrayBuffer.prototype.append = function (arrayBuffer) {
-    return this;
-  };
-  SparkMD5.ArrayBuffer.prototype.end = function () {
-    return 'a1b2c3d4e5f6789012345678901234567890abcd'.substring(0, 32);
-  };
+  function getDefaultExportFromCjs (x) {
+  	return x && x.__esModule && Object.prototype.hasOwnProperty.call(x, 'default') ? x['default'] : x;
+  }
+
+  var sparkMd5_min = {exports: {}};
+
+  sparkMd5_min.exports;
+
+  var hasRequiredSparkMd5_min;
+
+  function requireSparkMd5_min () {
+  	if (hasRequiredSparkMd5_min) return sparkMd5_min.exports;
+  	hasRequiredSparkMd5_min = 1;
+  	(function (module, exports) {
+  		(function(factory){{module.exports=factory();}})(function(undefined$1){var hex_chr=["0","1","2","3","4","5","6","7","8","9","a","b","c","d","e","f"];function md5cycle(x,k){var a=x[0],b=x[1],c=x[2],d=x[3];a+=(b&c|~b&d)+k[0]-680876936|0;a=(a<<7|a>>>25)+b|0;d+=(a&b|~a&c)+k[1]-389564586|0;d=(d<<12|d>>>20)+a|0;c+=(d&a|~d&b)+k[2]+606105819|0;c=(c<<17|c>>>15)+d|0;b+=(c&d|~c&a)+k[3]-1044525330|0;b=(b<<22|b>>>10)+c|0;a+=(b&c|~b&d)+k[4]-176418897|0;a=(a<<7|a>>>25)+b|0;d+=(a&b|~a&c)+k[5]+1200080426|0;d=(d<<12|d>>>20)+a|0;c+=(d&a|~d&b)+k[6]-1473231341|0;c=(c<<17|c>>>15)+d|0;b+=(c&d|~c&a)+k[7]-45705983|0;b=(b<<22|b>>>10)+c|0;a+=(b&c|~b&d)+k[8]+1770035416|0;a=(a<<7|a>>>25)+b|0;d+=(a&b|~a&c)+k[9]-1958414417|0;d=(d<<12|d>>>20)+a|0;c+=(d&a|~d&b)+k[10]-42063|0;c=(c<<17|c>>>15)+d|0;b+=(c&d|~c&a)+k[11]-1990404162|0;b=(b<<22|b>>>10)+c|0;a+=(b&c|~b&d)+k[12]+1804603682|0;a=(a<<7|a>>>25)+b|0;d+=(a&b|~a&c)+k[13]-40341101|0;d=(d<<12|d>>>20)+a|0;c+=(d&a|~d&b)+k[14]-1502002290|0;c=(c<<17|c>>>15)+d|0;b+=(c&d|~c&a)+k[15]+1236535329|0;b=(b<<22|b>>>10)+c|0;a+=(b&d|c&~d)+k[1]-165796510|0;a=(a<<5|a>>>27)+b|0;d+=(a&c|b&~c)+k[6]-1069501632|0;d=(d<<9|d>>>23)+a|0;c+=(d&b|a&~b)+k[11]+643717713|0;c=(c<<14|c>>>18)+d|0;b+=(c&a|d&~a)+k[0]-373897302|0;b=(b<<20|b>>>12)+c|0;a+=(b&d|c&~d)+k[5]-701558691|0;a=(a<<5|a>>>27)+b|0;d+=(a&c|b&~c)+k[10]+38016083|0;d=(d<<9|d>>>23)+a|0;c+=(d&b|a&~b)+k[15]-660478335|0;c=(c<<14|c>>>18)+d|0;b+=(c&a|d&~a)+k[4]-405537848|0;b=(b<<20|b>>>12)+c|0;a+=(b&d|c&~d)+k[9]+568446438|0;a=(a<<5|a>>>27)+b|0;d+=(a&c|b&~c)+k[14]-1019803690|0;d=(d<<9|d>>>23)+a|0;c+=(d&b|a&~b)+k[3]-187363961|0;c=(c<<14|c>>>18)+d|0;b+=(c&a|d&~a)+k[8]+1163531501|0;b=(b<<20|b>>>12)+c|0;a+=(b&d|c&~d)+k[13]-1444681467|0;a=(a<<5|a>>>27)+b|0;d+=(a&c|b&~c)+k[2]-51403784|0;d=(d<<9|d>>>23)+a|0;c+=(d&b|a&~b)+k[7]+1735328473|0;c=(c<<14|c>>>18)+d|0;b+=(c&a|d&~a)+k[12]-1926607734|0;b=(b<<20|b>>>12)+c|0;a+=(b^c^d)+k[5]-378558|0;a=(a<<4|a>>>28)+b|0;d+=(a^b^c)+k[8]-2022574463|0;d=(d<<11|d>>>21)+a|0;c+=(d^a^b)+k[11]+1839030562|0;c=(c<<16|c>>>16)+d|0;b+=(c^d^a)+k[14]-35309556|0;b=(b<<23|b>>>9)+c|0;a+=(b^c^d)+k[1]-1530992060|0;a=(a<<4|a>>>28)+b|0;d+=(a^b^c)+k[4]+1272893353|0;d=(d<<11|d>>>21)+a|0;c+=(d^a^b)+k[7]-155497632|0;c=(c<<16|c>>>16)+d|0;b+=(c^d^a)+k[10]-1094730640|0;b=(b<<23|b>>>9)+c|0;a+=(b^c^d)+k[13]+681279174|0;a=(a<<4|a>>>28)+b|0;d+=(a^b^c)+k[0]-358537222|0;d=(d<<11|d>>>21)+a|0;c+=(d^a^b)+k[3]-722521979|0;c=(c<<16|c>>>16)+d|0;b+=(c^d^a)+k[6]+76029189|0;b=(b<<23|b>>>9)+c|0;a+=(b^c^d)+k[9]-640364487|0;a=(a<<4|a>>>28)+b|0;d+=(a^b^c)+k[12]-421815835|0;d=(d<<11|d>>>21)+a|0;c+=(d^a^b)+k[15]+530742520|0;c=(c<<16|c>>>16)+d|0;b+=(c^d^a)+k[2]-995338651|0;b=(b<<23|b>>>9)+c|0;a+=(c^(b|~d))+k[0]-198630844|0;a=(a<<6|a>>>26)+b|0;d+=(b^(a|~c))+k[7]+1126891415|0;d=(d<<10|d>>>22)+a|0;c+=(a^(d|~b))+k[14]-1416354905|0;c=(c<<15|c>>>17)+d|0;b+=(d^(c|~a))+k[5]-57434055|0;b=(b<<21|b>>>11)+c|0;a+=(c^(b|~d))+k[12]+1700485571|0;a=(a<<6|a>>>26)+b|0;d+=(b^(a|~c))+k[3]-1894986606|0;d=(d<<10|d>>>22)+a|0;c+=(a^(d|~b))+k[10]-1051523|0;c=(c<<15|c>>>17)+d|0;b+=(d^(c|~a))+k[1]-2054922799|0;b=(b<<21|b>>>11)+c|0;a+=(c^(b|~d))+k[8]+1873313359|0;a=(a<<6|a>>>26)+b|0;d+=(b^(a|~c))+k[15]-30611744|0;d=(d<<10|d>>>22)+a|0;c+=(a^(d|~b))+k[6]-1560198380|0;c=(c<<15|c>>>17)+d|0;b+=(d^(c|~a))+k[13]+1309151649|0;b=(b<<21|b>>>11)+c|0;a+=(c^(b|~d))+k[4]-145523070|0;a=(a<<6|a>>>26)+b|0;d+=(b^(a|~c))+k[11]-1120210379|0;d=(d<<10|d>>>22)+a|0;c+=(a^(d|~b))+k[2]+718787259|0;c=(c<<15|c>>>17)+d|0;b+=(d^(c|~a))+k[9]-343485551|0;b=(b<<21|b>>>11)+c|0;x[0]=a+x[0]|0;x[1]=b+x[1]|0;x[2]=c+x[2]|0;x[3]=d+x[3]|0;}function md5blk(s){var md5blks=[],i;for(i=0;i<64;i+=4){md5blks[i>>2]=s.charCodeAt(i)+(s.charCodeAt(i+1)<<8)+(s.charCodeAt(i+2)<<16)+(s.charCodeAt(i+3)<<24);}return md5blks}function md5blk_array(a){var md5blks=[],i;for(i=0;i<64;i+=4){md5blks[i>>2]=a[i]+(a[i+1]<<8)+(a[i+2]<<16)+(a[i+3]<<24);}return md5blks}function md51(s){var n=s.length,state=[1732584193,-271733879,-1732584194,271733878],i,length,tail,tmp,lo,hi;for(i=64;i<=n;i+=64){md5cycle(state,md5blk(s.substring(i-64,i)));}s=s.substring(i-64);length=s.length;tail=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];for(i=0;i<length;i+=1){tail[i>>2]|=s.charCodeAt(i)<<(i%4<<3);}tail[i>>2]|=128<<(i%4<<3);if(i>55){md5cycle(state,tail);for(i=0;i<16;i+=1){tail[i]=0;}}tmp=n*8;tmp=tmp.toString(16).match(/(.*?)(.{0,8})$/);lo=parseInt(tmp[2],16);hi=parseInt(tmp[1],16)||0;tail[14]=lo;tail[15]=hi;md5cycle(state,tail);return state}function md51_array(a){var n=a.length,state=[1732584193,-271733879,-1732584194,271733878],i,length,tail,tmp,lo,hi;for(i=64;i<=n;i+=64){md5cycle(state,md5blk_array(a.subarray(i-64,i)));}a=i-64<n?a.subarray(i-64):new Uint8Array(0);length=a.length;tail=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];for(i=0;i<length;i+=1){tail[i>>2]|=a[i]<<(i%4<<3);}tail[i>>2]|=128<<(i%4<<3);if(i>55){md5cycle(state,tail);for(i=0;i<16;i+=1){tail[i]=0;}}tmp=n*8;tmp=tmp.toString(16).match(/(.*?)(.{0,8})$/);lo=parseInt(tmp[2],16);hi=parseInt(tmp[1],16)||0;tail[14]=lo;tail[15]=hi;md5cycle(state,tail);return state}function rhex(n){var s="",j;for(j=0;j<4;j+=1){s+=hex_chr[n>>j*8+4&15]+hex_chr[n>>j*8&15];}return s}function hex(x){var i;for(i=0;i<x.length;i+=1){x[i]=rhex(x[i]);}return x.join("")}if(hex(md51("hello"))!=="5d41402abc4b2a76b9719d911017c592");if(typeof ArrayBuffer!=="undefined"&&!ArrayBuffer.prototype.slice){(function(){function clamp(val,length){val=val|0||0;if(val<0){return Math.max(val+length,0)}return Math.min(val,length)}ArrayBuffer.prototype.slice=function(from,to){var length=this.byteLength,begin=clamp(from,length),end=length,num,target,targetArray,sourceArray;if(to!==undefined$1){end=clamp(to,length);}if(begin>end){return new ArrayBuffer(0)}num=end-begin;target=new ArrayBuffer(num);targetArray=new Uint8Array(target);sourceArray=new Uint8Array(this,begin,num);targetArray.set(sourceArray);return target};})();}function toUtf8(str){if(/[\u0080-\uFFFF]/.test(str)){str=unescape(encodeURIComponent(str));}return str}function utf8Str2ArrayBuffer(str,returnUInt8Array){var length=str.length,buff=new ArrayBuffer(length),arr=new Uint8Array(buff),i;for(i=0;i<length;i+=1){arr[i]=str.charCodeAt(i);}return returnUInt8Array?arr:buff}function arrayBuffer2Utf8Str(buff){return String.fromCharCode.apply(null,new Uint8Array(buff))}function concatenateArrayBuffers(first,second,returnUInt8Array){var result=new Uint8Array(first.byteLength+second.byteLength);result.set(new Uint8Array(first));result.set(new Uint8Array(second),first.byteLength);return returnUInt8Array?result:result.buffer}function hexToBinaryString(hex){var bytes=[],length=hex.length,x;for(x=0;x<length-1;x+=2){bytes.push(parseInt(hex.substr(x,2),16));}return String.fromCharCode.apply(String,bytes)}function SparkMD5(){this.reset();}SparkMD5.prototype.append=function(str){this.appendBinary(toUtf8(str));return this};SparkMD5.prototype.appendBinary=function(contents){this._buff+=contents;this._length+=contents.length;var length=this._buff.length,i;for(i=64;i<=length;i+=64){md5cycle(this._hash,md5blk(this._buff.substring(i-64,i)));}this._buff=this._buff.substring(i-64);return this};SparkMD5.prototype.end=function(raw){var buff=this._buff,length=buff.length,i,tail=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],ret;for(i=0;i<length;i+=1){tail[i>>2]|=buff.charCodeAt(i)<<(i%4<<3);}this._finish(tail,length);ret=hex(this._hash);if(raw){ret=hexToBinaryString(ret);}this.reset();return ret};SparkMD5.prototype.reset=function(){this._buff="";this._length=0;this._hash=[1732584193,-271733879,-1732584194,271733878];return this};SparkMD5.prototype.getState=function(){return {buff:this._buff,length:this._length,hash:this._hash.slice()}};SparkMD5.prototype.setState=function(state){this._buff=state.buff;this._length=state.length;this._hash=state.hash;return this};SparkMD5.prototype.destroy=function(){delete this._hash;delete this._buff;delete this._length;};SparkMD5.prototype._finish=function(tail,length){var i=length,tmp,lo,hi;tail[i>>2]|=128<<(i%4<<3);if(i>55){md5cycle(this._hash,tail);for(i=0;i<16;i+=1){tail[i]=0;}}tmp=this._length*8;tmp=tmp.toString(16).match(/(.*?)(.{0,8})$/);lo=parseInt(tmp[2],16);hi=parseInt(tmp[1],16)||0;tail[14]=lo;tail[15]=hi;md5cycle(this._hash,tail);};SparkMD5.hash=function(str,raw){return SparkMD5.hashBinary(toUtf8(str),raw)};SparkMD5.hashBinary=function(content,raw){var hash=md51(content),ret=hex(hash);return raw?hexToBinaryString(ret):ret};SparkMD5.ArrayBuffer=function(){this.reset();};SparkMD5.ArrayBuffer.prototype.append=function(arr){var buff=concatenateArrayBuffers(this._buff.buffer,arr,true),length=buff.length,i;this._length+=arr.byteLength;for(i=64;i<=length;i+=64){md5cycle(this._hash,md5blk_array(buff.subarray(i-64,i)));}this._buff=i-64<length?new Uint8Array(buff.buffer.slice(i-64)):new Uint8Array(0);return this};SparkMD5.ArrayBuffer.prototype.end=function(raw){var buff=this._buff,length=buff.length,tail=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],i,ret;for(i=0;i<length;i+=1){tail[i>>2]|=buff[i]<<(i%4<<3);}this._finish(tail,length);ret=hex(this._hash);if(raw){ret=hexToBinaryString(ret);}this.reset();return ret};SparkMD5.ArrayBuffer.prototype.reset=function(){this._buff=new Uint8Array(0);this._length=0;this._hash=[1732584193,-271733879,-1732584194,271733878];return this};SparkMD5.ArrayBuffer.prototype.getState=function(){var state=SparkMD5.prototype.getState.call(this);state.buff=arrayBuffer2Utf8Str(state.buff);return state};SparkMD5.ArrayBuffer.prototype.setState=function(state){state.buff=utf8Str2ArrayBuffer(state.buff,true);return SparkMD5.prototype.setState.call(this,state)};SparkMD5.ArrayBuffer.prototype.destroy=SparkMD5.prototype.destroy;SparkMD5.ArrayBuffer.prototype._finish=SparkMD5.prototype._finish;SparkMD5.ArrayBuffer.hash=function(arr,raw){var hash=md51_array(new Uint8Array(arr)),ret=hex(hash);return raw?hexToBinaryString(ret):ret};return SparkMD5}); 
+  	} (sparkMd5_min, sparkMd5_min.exports));
+  	return sparkMd5_min.exports;
+  }
+
+  var sparkMd5_minExports = requireSparkMd5_min();
+  var SparkMD5 = /*@__PURE__*/getDefaultExportFromCjs(sparkMd5_minExports);
 
   /**
    * 计算文件哈希（头尾各 16MB）
@@ -3445,7 +3611,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {number} fileSize
    * @returns {Promise<string|null>}
    */
-  async function calculateFileHash(streamUrl, fileSize) {
+  async function calculateFileHash(streamUrl, fileSize, signal) {
     if (!streamUrl || !fileSize) {
       console.warn('缺少 streamUrl 或 fileSize，无法计算哈希。');
       return null;
@@ -3455,9 +3621,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       console.warn('[Hash] 流媒体URL缺少api_key参数，可能导致认证失败');
     }
     var authHeaders = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      Accept: '*/*',
-      'Accept-Encoding': 'identity'
+      Accept: '*/*'
     };
     var CHUNK_SIZE = 16 * 1024 * 1024;
     var spark = new SparkMD5.ArrayBuffer();
@@ -3465,12 +3629,14 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       if (fileSize < CHUNK_SIZE * 2) {
         console.log("[Hash] \u6587\u4EF6\u5927\u5C0F (".concat((fileSize / 1024 / 1024).toFixed(2), "MB) \u5C0F\u4E8E32MB\uFF0C\u5C06\u4E0B\u8F7D\u6574\u4E2A\u6587\u4EF6\u8BA1\u7B97\u54C8\u5E0C\u3002"));
         var response = await fetch(streamUrl, {
-          headers: authHeaders
+          headers: authHeaders,
+          signal: signal
         });
         if (!response.ok) {
           throw new Error("\u4E0B\u8F7D\u6587\u4EF6\u5931\u8D25: ".concat(response.status, " ").concat(response.statusText));
         }
         var arrayBuffer = await response.arrayBuffer();
+        if (arrayBuffer.byteLength === 0) throw new Error('下载的文件内容为空');
         spark.append(arrayBuffer);
       } else {
         console.log("[Hash] \u6587\u4EF6\u5927\u5C0F (".concat((fileSize / 1024 / 1024).toFixed(2), "MB)\uFF0C\u5C06\u5206\u5757\u4E0B\u8F7D\u8BA1\u7B97\u54C8\u5E0C\u3002"));
@@ -3478,28 +3644,36 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
           headers: _objectSpread2(_objectSpread2({}, authHeaders), {}, {
             Range: "bytes=0-".concat(CHUNK_SIZE - 1),
             'Accept-Ranges': 'bytes'
-          })
+          }),
+          signal: signal
         });
-        if (!headResponse.ok) {
+        if (headResponse.status !== 206) {
           throw new Error("\u4E0B\u8F7D\u6587\u4EF6\u5934\u90E8\u5931\u8D25: ".concat(headResponse.status, " ").concat(headResponse.statusText));
         }
-        spark.append(await headResponse.arrayBuffer());
+        var headBuffer = await headResponse.arrayBuffer();
+        if (headBuffer.byteLength === 0) throw new Error('下载的文件头部为空');
+        spark.append(headBuffer);
         var tailResponse = await fetch(streamUrl, {
           headers: _objectSpread2(_objectSpread2({}, authHeaders), {}, {
             Range: "bytes=".concat(fileSize - CHUNK_SIZE, "-").concat(fileSize - 1),
             'Accept-Ranges': 'bytes'
-          })
+          }),
+          signal: signal
         });
-        if (!tailResponse.ok) {
+        if (tailResponse.status !== 206) {
           throw new Error("\u4E0B\u8F7D\u6587\u4EF6\u5C3E\u90E8\u5931\u8D25: ".concat(tailResponse.status, " ").concat(tailResponse.statusText));
         }
-        spark.append(await tailResponse.arrayBuffer());
+        var tailBuffer = await tailResponse.arrayBuffer();
+        if (tailBuffer.byteLength === 0) throw new Error('下载的文件尾部为空');
+        spark.append(tailBuffer);
       }
       var hash = spark.end();
       console.log("[Hash] \u6587\u4EF6\u54C8\u5E0C\u8BA1\u7B97\u6210\u529F: ".concat(hash));
       return hash;
     } catch (error) {
-      console.warn('[Hash] 文件哈希计算过程中发生错误:', error);
+      if ((error === null || error === void 0 ? void 0 : error.name) !== 'AbortError') {
+        console.warn('[Hash] 文件哈希计算过程中发生错误:', error);
+      }
       return null;
     }
   }
@@ -3515,20 +3689,23 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {string[]} apiPriority
    * @returns {Promise<object|null>}
    */
-  async function tryMatchByHash(animeName, expectedEpisodeNumber, streamUrl, size, duration, apiConfigs, apiPriority) {
+  async function tryMatchByHash(animeName, expectedEpisodeNumber, streamUrl, size, duration, apiConfigs, apiPriority, signal) {
+    if (!streamUrl || !(size > 0)) {
+      console.warn('未找到播放链接或文件大小，跳过哈希匹配。');
+      return null;
+    }
+    var fileHash = await calculateFileHash(streamUrl, size, signal);
+    if (!fileHash || signal !== null && signal !== void 0 && signal.aborted) {
+      console.warn('没有有效文件哈希，跳过哈希匹配。');
+      return null;
+    }
     var matchPayload = {
       fileName: animeName,
-      fileHash: 'a1b2c3d4e5f67890abcd1234ef567890',
+      fileHash: fileHash,
       fileSize: size || 0,
       videoDuration: Math.floor(duration || 0),
       matchMode: 'hashAndFileName'
     };
-    if (streamUrl && size > 0) {
-      console.log("\u51C6\u5907\u901A\u8FC7\u64AD\u653E\u94FE\u63A5\u8BA1\u7B97\u6587\u4EF6\u54C8\u5E0C");
-      matchPayload.fileHash = (await calculateFileHash(streamUrl, size)) || matchPayload.fileHash;
-    } else {
-      console.warn('未找到播放链接或文件大小，将使用假哈希值进行匹配。');
-    }
     var _iterator = _createForOfIteratorHelper(apiPriority),
       _step;
     try {
@@ -3538,7 +3715,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         var config = apiConfigs[apiKey];
         if (!config || !config.enabled || apiKey === 'custom' && !config.prefix) continue;
         console.log("[\u81EA\u52A8\u5339\u914D] \u5C1D\u8BD5 ".concat(config.name, " /match \u63A5\u53E3"));
-        var matchResult = await fetchMatchApi(matchPayload, config.prefix);
+        var matchResult = await fetchMatchApi(matchPayload, config.prefix, signal);
         if (matchResult !== null && matchResult !== void 0 && matchResult.isMatched && ((_matchResult$animes = matchResult.animes) === null || _matchResult$animes === void 0 ? void 0 : _matchResult$animes.length) > 0) {
           var candidates = prioritizeSeasonCandidates(animeName, matchResult.animes);
           var match = candidates.find(function (candidate) {
@@ -3608,7 +3785,15 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       return console.log('_season_key is undefined, skip');
     }
     var seasonInfoListStr = localStorage.getItem(_season_key);
-    var seasonInfoList = seasonInfoListStr ? JSON.parse(seasonInfoListStr) : [];
+    var seasonInfoList = [];
+    if (seasonInfoListStr) {
+      try {
+        seasonInfoList = JSON.parse(seasonInfoListStr);
+        if (!Array.isArray(seasonInfoList)) seasonInfoList = [];
+      } catch (error) {
+        console.warn('[赛季缓存] 记录损坏，已重建:', error);
+      }
+    }
     var existingSeasonInfo = seasonInfoList.find(function (si) {
       return si.name === newSeasonInfo.name;
     });
@@ -3648,16 +3833,23 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {string} prefix
    * @returns {Promise<object|null>}
    */
-  async function lsSeasonSearchEpisodes(_season_key, episode, prefix, searchTitle) {
+  async function lsSeasonSearchEpisodes(_season_key, episode, prefix, searchTitle, signal) {
     var seasonInfoListStr = window.localStorage.getItem(_season_key);
     if (!seasonInfoListStr) return null;
-    var seasonInfoList = JSON.parse(seasonInfoListStr);
+    var seasonInfoList;
+    try {
+      seasonInfoList = JSON.parse(seasonInfoListStr);
+    } catch (error) {
+      console.warn('[赛季缓存] 记录损坏，已清除:', error);
+      window.localStorage.removeItem(_season_key);
+      return null;
+    }
     var selectedSeasonInfo = selectSeasonInfo(searchTitle, seasonInfoList, episode);
     if (selectedSeasonInfo) {
       var episodeOffset = getSeasonEpisodeOffset(selectedSeasonInfo);
       var newEpisode = Number(episode) + episodeOffset;
       console.log("\u547D\u4E2DseasonInfo\u7F13\u5B58: ".concat(selectedSeasonInfo.name, ",\u504F\u79FB\u91CF: ").concat(episodeOffset, ",\u96C6: ").concat(newEpisode));
-      var animaInfo = await fetchSearchEpisodes(selectedSeasonInfo.name, newEpisode, selectedSeasonInfo.apiPrefix || prefix);
+      var animaInfo = await fetchSearchEpisodes(selectedSeasonInfo.name, newEpisode, selectedSeasonInfo.apiPrefix || prefix, signal);
       if (animaInfo !== null && animaInfo !== void 0 && animaInfo.animes) {
         animaInfo.animes = prioritizeSeasonCandidates(searchTitle, animaInfo.animes);
         var selectedAnimeIndex = animaInfo.animes.findIndex(function (anime) {
@@ -3681,7 +3873,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {object} itemInfoMap - 由 getMapByEmbyItemInfo 提供
    * @returns {Promise<object|null>}
    */
-  async function searchEpisodes(itemInfoMap) {
+  async function searchEpisodes(itemInfoMap, signal) {
     var _apiConfigs$custom$pr, _apiConfigs$currentPr, _animaRes$animaInfo, _animaInfo$animes2;
     var _season_key = itemInfoMap._season_key,
       animeName = itemInfoMap.animeName,
@@ -3707,7 +3899,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     };
     var currentPriority = Array.isArray(apiPriority) && apiPriority[0] === 'custom' && apiConfigs.custom.enabled && (_apiConfigs$custom$pr = apiConfigs.custom.prefix) !== null && _apiConfigs$custom$pr !== void 0 && _apiConfigs$custom$pr.trim() ? 'custom' : 'official';
     var selectedApiConfig = apiConfigs[currentPriority].enabled && (_apiConfigs$currentPr = apiConfigs[currentPriority].prefix) !== null && _apiConfigs$currentPr !== void 0 && _apiConfigs$currentPr.trim() ? apiConfigs[currentPriority] : apiConfigs.custom;
-    var animaRes = await lsSeasonSearchEpisodes(_season_key, episode, selectedApiConfig.prefix, animeName);
+    var animaRes = await lsSeasonSearchEpisodes(_season_key, episode, selectedApiConfig.prefix, animeName, signal);
     if ((animaRes === null || animaRes === void 0 || (_animaRes$animaInfo = animaRes.animaInfo) === null || _animaRes$animaInfo === void 0 || (_animaRes$animaInfo = _animaRes$animaInfo.animes) === null || _animaRes$animaInfo === void 0 ? void 0 : _animaRes$animaInfo.length) > 0 && hasCompatibleEpisode(animaRes.animaInfo, animaRes.expectedEpisodeNumber)) {
       console.log("[\u81EA\u52A8\u5339\u914D] \u547D\u4E2D\u8D5B\u5B63\u7F13\u5B58\uFF0C\u76F4\u63A5\u4F7F\u7528");
       return {
@@ -3716,9 +3908,9 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         expectedEpisodeNumber: animaRes.expectedEpisodeNumber
       };
     }
-    var tmdbMatchResult = await tryMatchByTmdbId(itemInfoMap, apiConfigs, apiPriority);
+    var tmdbMatchResult = await tryMatchByTmdbId(itemInfoMap, apiConfigs, apiPriority, signal);
     if (tmdbMatchResult) return tmdbMatchResult;
-    var hashMatchResult = await tryMatchByHash(episodeName, episode, streamUrl, size, duration, apiConfigs, apiPriority);
+    var hashMatchResult = await tryMatchByHash(episodeName, episode, streamUrl, size, duration, apiConfigs, apiPriority, signal);
     if (hashMatchResult) return hashMatchResult;
     var _iterator = _createForOfIteratorHelper(apiPriority),
       _step;
@@ -3738,7 +3930,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
             console.log("[\u81EA\u52A8\u5339\u914D][\u5B98\u65B9API\u4F18\u5316] \u683C\u5F0F\u5316\u641C\u7D22: \u6807\u9898='".concat(searchTitle, "', \u96C6\u6570=").concat(searchEpisode));
           }
         }
-        var searchAnimaInfo = await fetchSearchEpisodes(searchTitle, searchEpisode, config.prefix);
+        var searchAnimaInfo = await fetchSearchEpisodes(searchTitle, searchEpisode, config.prefix, signal);
         if (((_searchAnimaInfo = searchAnimaInfo) === null || _searchAnimaInfo === void 0 || (_searchAnimaInfo = _searchAnimaInfo.animes) === null || _searchAnimaInfo === void 0 ? void 0 : _searchAnimaInfo.length) > 0 && hasCompatibleEpisode(searchAnimaInfo, searchEpisode)) {
           searchAnimaInfo.animes = prioritizeSeasonCandidates(searchTitle, searchAnimaInfo.animes);
           return {
@@ -3747,7 +3939,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
             expectedEpisodeNumber: searchEpisode
           };
         }
-        searchAnimaInfo = await fetchSearchEpisodes(episodeName, null, config.prefix);
+        searchAnimaInfo = await fetchSearchEpisodes(episodeName, null, config.prefix, signal);
         if (((_searchAnimaInfo2 = searchAnimaInfo) === null || _searchAnimaInfo2 === void 0 || (_searchAnimaInfo2 = _searchAnimaInfo2.animes) === null || _searchAnimaInfo2 === void 0 ? void 0 : _searchAnimaInfo2.length) > 0 && hasCompatibleEpisode(searchAnimaInfo, episode)) {
           searchAnimaInfo.animes = prioritizeSeasonCandidates(episodeName, searchAnimaInfo.animes);
           return {
@@ -3762,7 +3954,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     } finally {
       _iterator.f();
     }
-    var animaInfo = await fetchSearchEpisodes(animeName, episode, selectedApiConfig.prefix);
+    var animaInfo = await fetchSearchEpisodes(animeName, episode, selectedApiConfig.prefix, signal);
     if ((animaInfo === null || animaInfo === void 0 || (_animaInfo$animes2 = animaInfo.animes) === null || _animaInfo$animes2 === void 0 ? void 0 : _animaInfo$animes2.length) > 0 && hasCompatibleEpisode(animaInfo, episode)) {
       animaInfo.animes = prioritizeSeasonCandidates(animeName, animaInfo.animes);
       return {
@@ -3771,7 +3963,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         expectedEpisodeNumber: episode
       };
     }
-    return autoFailback(animeName, episode, seriesOrMovieId, selectedApiConfig.prefix);
+    return autoFailback(animeName, episode, seriesOrMovieId, selectedApiConfig.prefix, signal);
   }
 
   /**
@@ -3783,7 +3975,9 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var _window$ede2, _res$expectedEpisodeN, _res$animaInfo;
     var is_auto = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : true;
     var appendvideoOsdDanmakuInfo = arguments.length > 1 ? arguments[1] : undefined;
-    var itemInfoMap = await getMapByEmbyItemInfo();
+    var signal = arguments.length > 2 ? arguments[2] : undefined;
+    var session = arguments.length > 3 ? arguments[3] : undefined;
+    var itemInfoMap = await getMapByEmbyItemInfo(session);
     if (!itemInfoMap) return null;
     var _episode_key = itemInfoMap._episode_key,
       animeId = itemInfoMap.animeId,
@@ -3853,7 +4047,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         predictedEpisodeId = previousEpisodeId - 1;
       }
       if (predictedEpisodeId) {
-        var comments = await fetchComment(predictedEpisodeId);
+        var comments = await fetchComment(predictedEpisodeId, signal);
         if ((comments === null || comments === void 0 ? void 0 : comments.length) > 0) {
           return _objectSpread2(_objectSpread2({}, itemInfoMap), {}, {
             episodeId: predictedEpisodeId,
@@ -3871,7 +4065,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         }
       }
     }
-    var res = await searchEpisodes(itemInfoMap);
+    var res = await searchEpisodes(itemInfoMap, signal);
     if (!lsGetItem(lsKeys.useOfficialApi.id) && !lsGetItem(lsKeys.useCustomApi.id)) {
       return null;
     }
@@ -3975,6 +4169,62 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     return episodeInfo;
   }
 
+  function getCommentKey(comment) {
+    if ((comment === null || comment === void 0 ? void 0 : comment.cid) !== undefined && (comment === null || comment === void 0 ? void 0 : comment.cid) !== null && comment.cid !== '') {
+      return "cid:".concat(comment.cid);
+    }
+    return "content:".concat((comment === null || comment === void 0 ? void 0 : comment.p) || '', "\0").concat((comment === null || comment === void 0 ? void 0 : comment.m) || '');
+  }
+  function dedupeComments(commentGroups) {
+    var seen = new Set();
+    var result = [];
+    commentGroups.forEach(function (comments) {
+      (comments || []).forEach(function (comment) {
+        if (!comment) return;
+        var key = getCommentKey(comment);
+        if (seen.has(key)) return;
+        seen.add(key);
+        result.push(comment);
+      });
+    });
+    return result;
+  }
+
+  /**
+   * 并行获取附加弹幕，但只在全部请求结束后聚合一次。
+   */
+  async function aggregateExtComments(baseComments, entries, fetcher, signal, session) {
+    var settled = await Promise.all(entries.map(function (_ref) {
+      var _ref2 = _slicedToArray(_ref, 2),
+        url = _ref2[0],
+        cached = _ref2[1];
+      return Promise.resolve().then(async function () {
+        if (signal !== null && signal !== void 0 && signal.aborted) throw new DOMException('Aborted', 'AbortError');
+        var comments = Array.isArray(cached) ? cached : await fetcher(url, baseComments, signal, session);
+        return {
+          status: 'fulfilled',
+          value: Array.isArray(comments) ? comments : []
+        };
+      }).catch(function (reason) {
+        return {
+          status: 'rejected',
+          reason: reason
+        };
+      });
+    }));
+    if (signal !== null && signal !== void 0 && signal.aborted) throw new DOMException('Aborted', 'AbortError');
+    var successful = settled.filter(function (result) {
+      return result.status === 'fulfilled';
+    }).map(function (result) {
+      return result.value;
+    });
+    var failedCount = settled.length - successful.length;
+    return {
+      comments: dedupeComments([baseComments || []].concat(_toConsumableArray(successful))),
+      failedCount: failedCount
+    };
+  }
+
   /**
    * 创建并初始化弹幕实例
    * @param {object[]} comments - 原始弹幕数据
@@ -3982,8 +4232,11 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @returns {Promise<void>}
    */
   async function createDanmaku(comments) {
+    var _window$ede;
     var hooks = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
     if (!comments) return;
+    var session = hooks.session;
+    if (session) assertLoadSession(window.ede, session);
     var buildCurrentDanmakuInfo = hooks.buildCurrentDanmakuInfo || function () {};
     var appendvideoOsdDanmakuInfo = hooks.appendvideoOsdDanmakuInfo || function () {};
     if (window.ede.danmaku) {
@@ -4012,7 +4265,9 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     wrapper = document.createElement('div');
     wrapper.id = eleIds.danmakuWrapper;
     wrapper.style.cssText = "\n        position: fixed;\n        width: 100%;\n        height: calc(".concat(lsGetItem(lsKeys.heightPercent.id), "% - ").concat(wrapperTop, "px);\n        background-color: ").concat(lsGetItem(lsKeys.debugShowDanmakuWrapper.id) ? 'rgba(115, 160, 255, 0.3)' : '', ";\n        top: ").concat(wrapperTop, "px;\n        pointer-events: none;\n    ");
-    var _container = await waitForElement(mediaContainerQueryStr);
+    var _container = await waitForElement(mediaContainerQueryStr, null, 0, 100, (_window$ede = window.ede) === null || _window$ede === void 0 ? void 0 : _window$ede.destroyIntervalIds);
+    if (!_container) throw new DOMException('Danmaku container wait cancelled', 'AbortError');
+    if (session) assertLoadSession(window.ede, session);
     _container.prepend(wrapper);
     var _speed = 144 * lsGetItem(lsKeys.speed.id);
     var DanmakuClass = window.Danmaku;
@@ -4061,11 +4316,13 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {string} mediaServerItemId
    * @returns {Promise<object[]|null>}
    */
-  async function getCommentsByPluginApi(mediaServerItemId) {
+  async function getCommentsByPluginApi(mediaServerItemId, signal) {
     if (typeof ApiClient === 'undefined') return null;
     var url = "".concat(ApiClient.serverAddress(), "/api/danmu/").concat(mediaServerItemId, "/raw?X-Emby-Token=").concat(ApiClient.accessToken());
     try {
-      var response = await fetch(url);
+      var response = await fetch(url, {
+        signal: signal
+      });
       if (!response.ok) return null;
       var xmlText = await response.text();
       if (!(xmlText !== null && xmlText !== void 0 && xmlText.length)) return null;
@@ -4092,23 +4349,10 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       }
       return comments;
     } catch (error) {
+      if ((error === null || error === void 0 ? void 0 : error.name) === 'AbortError') throw error;
       console.error('Failed to parse XML data:', error);
       return null;
     }
-  }
-  async function addExtCommentsForLoad(extUrl, extComments) {
-    var _window$ede, _window$ede2, _extComments;
-    var hooks = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : {};
-    var episodeId = (_window$ede = window.ede) === null || _window$ede === void 0 || (_window$ede = _window$ede.episode_info) === null || _window$ede === void 0 ? void 0 : _window$ede.episodeId;
-    var comments = ((_window$ede2 = window.ede) === null || _window$ede2 === void 0 || (_window$ede2 = _window$ede2.danmuCache) === null || _window$ede2 === void 0 ? void 0 : _window$ede2[episodeId]) || [];
-    if (!extComments) {
-      extComments = await fetchExtcommentActual(extUrl, comments);
-    }
-    if (!((_extComments = extComments) !== null && _extComments !== void 0 && _extComments.length)) return;
-    var allComments = comments.concat(extComments);
-    await createDanmaku(allComments, hooks).catch(function (err) {
-      return console.log(err);
-    });
   }
 
   /**
@@ -4117,7 +4361,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * @param {object} [hooks] - { buildCurrentDanmakuInfo }
    */
   async function loadDanmaku() {
-    var _window$ede3;
+    var _window$ede2;
     var loadType = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : LOAD_TYPE.CHECK;
     var hooks = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
     var _media = document.querySelector(mediaQueryStr);
@@ -4125,23 +4369,25 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       console.warn('用户已退出视频播放,停止加载弹幕');
       return false;
     }
-    if (loadType === LOAD_TYPE.RELOAD) window.ede.loading = false;
-    if ((_window$ede3 = window.ede) !== null && _window$ede3 !== void 0 && _window$ede3.loading) {
+    if ((_window$ede2 = window.ede) !== null && _window$ede2 !== void 0 && _window$ede2.loading && ![LOAD_TYPE.RELOAD, LOAD_TYPE.REFRESH, LOAD_TYPE.SEARCH].includes(loadType)) {
       console.log('正在重新加载');
       return false;
     }
-    window.ede.loading = true;
+    var session = beginLoadSession(window.ede);
     var buildCurrentDanmakuInfoFn = hooks.buildCurrentDanmakuInfo || function () {};
     var appendvideoOsdDanmakuInfoFn = hooks.appendvideoOsdDanmakuInfo || function () {};
     var createHooks = {
       buildCurrentDanmakuInfo: buildCurrentDanmakuInfoFn,
-      appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn
+      appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn,
+      session: session
     };
     try {
       window.ede.onlineDanmakuOk = false;
-      var onlineLoaded = await loadOnlineDanmaku(loadType, hooks);
+      var onlineLoaded = await loadOnlineDanmaku(loadType, hooks, session);
+      assertLoadSession(window.ede, session);
       if (onlineLoaded || !lsGetItem(lsKeys.useFetchPluginXml.id)) return onlineLoaded;
-      var comments = await getCommentsByPluginApi(window.ede.itemId);
+      var comments = await getCommentsByPluginApi(window.ede.itemId, session.controller.signal);
+      assertLoadSession(window.ede, session);
       if (!(comments !== null && comments !== void 0 && comments.length)) return false;
       await createDanmaku(comments, createHooks);
       window.ede.onlineDanmakuOk = true;
@@ -4152,10 +4398,10 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       if (title) title.innerText = "\u5F39\u5E55\uFF1A".concat(lsKeys.useFetchPluginXml.name, " - ").concat(comments.length, "\u6761");
       return true;
     } catch (error) {
-      console.error('[加载]弹幕加载失败:', error);
+      if ((error === null || error === void 0 ? void 0 : error.name) !== 'AbortError') console.error('[加载]弹幕加载失败:', error);
       return false;
     } finally {
-      window.ede.loading = false;
+      finishLoadSession(window.ede, session);
     }
   }
 
@@ -4166,20 +4412,23 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    */
   async function loadOnlineDanmaku(loadType) {
     var hooks = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
+    var session = arguments.length > 2 ? arguments[2] : undefined;
     var buildCurrentDanmakuInfoFn = hooks.buildCurrentDanmakuInfo || function () {};
     var appendvideoOsdDanmakuInfoFn = hooks.appendvideoOsdDanmakuInfo || function () {};
     var createHooks = {
       buildCurrentDanmakuInfo: buildCurrentDanmakuInfoFn,
-      appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn
+      appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfoFn,
+      session: session
     };
     try {
-      var _window$ede4, _window$ede5, _window$ede6, _comments2, _window$ede7;
-      var info = await getEpisodeInfo(loadType !== LOAD_TYPE.SEARCH, appendvideoOsdDanmakuInfoFn);
+      var _window$ede3, _window$ede4, _window$ede5, _comments2, _window$ede6;
+      var info = await getEpisodeInfo(loadType !== LOAD_TYPE.SEARCH, appendvideoOsdDanmakuInfoFn, session === null || session === void 0 ? void 0 : session.controller.signal, session);
+      if (session) assertLoadSession(window.ede, session);
       if (!info) {
         if (loadType !== LOAD_TYPE.INIT) console.log('播放器未完成加载');
         return false;
       }
-      if (![LOAD_TYPE.SEARCH, LOAD_TYPE.REFRESH, LOAD_TYPE.RELOAD, LOAD_TYPE.INIT].includes(loadType) && (_window$ede4 = window.ede) !== null && _window$ede4 !== void 0 && _window$ede4.danmaku && ((_window$ede5 = window.ede) === null || _window$ede5 === void 0 || (_window$ede5 = _window$ede5.episode_info) === null || _window$ede5 === void 0 ? void 0 : _window$ede5.episodeId) == info.episodeId) {
+      if (![LOAD_TYPE.SEARCH, LOAD_TYPE.REFRESH, LOAD_TYPE.RELOAD, LOAD_TYPE.INIT].includes(loadType) && (_window$ede3 = window.ede) !== null && _window$ede3 !== void 0 && _window$ede3.danmaku && ((_window$ede4 = window.ede) === null || _window$ede4 === void 0 || (_window$ede4 = _window$ede4.episode_info) === null || _window$ede4 === void 0 ? void 0 : _window$ede4.episodeId) == info.episodeId) {
         console.log('当前播放视频未变动');
         window.ede.onlineDanmakuOk = true;
         return true;
@@ -4189,34 +4438,74 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       }
       window.ede.episode_info = info;
       var episodeId = info.episodeId;
-      var comments = loadType === LOAD_TYPE.RELOAD ? (_window$ede6 = window.ede) === null || _window$ede6 === void 0 || (_window$ede6 = _window$ede6.danmuCache) === null || _window$ede6 === void 0 ? void 0 : _window$ede6[episodeId] : null;
+      var comments = loadType === LOAD_TYPE.RELOAD ? (_window$ede5 = window.ede) === null || _window$ede5 === void 0 || (_window$ede5 = _window$ede5.danmuCache) === null || _window$ede5 === void 0 ? void 0 : _window$ede5[episodeId] : null;
       if (!comments) {
-        comments = await fetchComment(episodeId);
+        comments = await fetchComment(episodeId, session === null || session === void 0 ? void 0 : session.controller.signal);
+        if (session) assertLoadSession(window.ede, session);
         window.ede.danmuCache = window.ede.danmuCache || {};
         window.ede.danmuCache[episodeId] = comments;
       }
       if (!((_comments2 = comments) !== null && _comments2 !== void 0 && _comments2.length)) return false;
-      await createDanmaku(comments, createHooks);
-      window.ede.onlineDanmakuOk = true;
-      var extCommentCache = ((_window$ede7 = window.ede) === null || _window$ede7 === void 0 || (_window$ede7 = _window$ede7.extCommentCache) === null || _window$ede7 === void 0 ? void 0 : _window$ede7[window.ede.itemId]) || {};
-      try {
-        await Promise.all(objectEntries(extCommentCache).map(function (_ref) {
-          var _ref2 = _slicedToArray(_ref, 2),
-            key = _ref2[0],
-            val = _ref2[1];
-          return addExtCommentsForLoad(key, val, createHooks);
-        }));
-      } catch (error) {
-        console.warn('[在线弹幕]附加弹幕加载失败，不影响主弹幕:', error);
+      var extCommentCache = ((_window$ede6 = window.ede) === null || _window$ede6 === void 0 || (_window$ede6 = _window$ede6.extCommentCache) === null || _window$ede6 === void 0 ? void 0 : _window$ede6[window.ede.itemId]) || {};
+      var extEntries = objectEntries(extCommentCache);
+      var allComments = comments;
+      if (extEntries.length > 0) {
+        var aggregated = await aggregateExtComments(comments, extEntries, fetchExtcommentActual, session === null || session === void 0 ? void 0 : session.controller.signal, session);
+        allComments = aggregated.comments;
+        if (aggregated.failedCount > 0) {
+          console.warn("[\u5728\u7EBF\u5F39\u5E55] ".concat(aggregated.failedCount, " \u4E2A\u9644\u52A0\u6E90\u52A0\u8F7D\u5931\u8D25"));
+        }
       }
+      await createDanmaku(allComments, createHooks);
+      window.ede.onlineDanmakuOk = true;
       var ctr = getById(eleIds.danmakuCtr);
       if (ctr) ctr.style.opacity = '1';
       return true;
     } catch (error) {
-      console.error('[在线弹幕]加载失败:', error);
-      window.ede.onlineDanmakuOk = false;
+      if ((error === null || error === void 0 ? void 0 : error.name) !== 'AbortError') console.error('[在线弹幕]加载失败:', error);
+      if (!session || isLoadSessionCurrent(window.ede, session)) {
+        window.ede.onlineDanmakuOk = false;
+      }
       return false;
     }
+  }
+
+  async function embyDialog() {
+    var opts = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
+    var defaultOpts = {
+      text: '',
+      title: '',
+      timeout: 0,
+      html: '',
+      buttons: []
+    };
+    opts = _objectSpread2(_objectSpread2({}, defaultOpts), opts);
+    if (typeof require === 'function') {
+      return require(['dialog']).then(function (items) {
+        return items[0](opts);
+      }).catch(function (error) {
+        return console.log('点击弹出框外部取消: ' + error);
+      });
+    }
+    return Promise.reject(new Error('Emby require not available'));
+  }
+  function closeEmbyDialog() {
+    var footerItem = getByClass(classes.formDialogFooterItem);
+    if (footerItem) footerItem.dispatchEvent(new Event('click'));
+  }
+  async function embyToast() {
+    var opts = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
+    var defaultOpts = {
+      text: '',
+      secondaryText: '',
+      icon: '',
+      iconStrikeThrough: false
+    };
+    opts = _objectSpread2(_objectSpread2({}, defaultOpts), opts);
+    if (typeof require === 'function') return require(['toast'], function (toast) {
+      return toast(opts);
+    });
+    return Promise.reject(new Error('Emby require not available'));
   }
 
   function doDanmakuSwitch$1() {
@@ -4456,9 +4745,13 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     }, function () {
       var textEl = getById(eleIds.settingsText);
       if (textEl !== null && textEl !== void 0 && textEl.value) {
-        lsBatchSet(JSON.parse(textEl.value));
-        loadDanmaku(LOAD_TYPE.INIT);
-        closeEmbyDialog();
+        try {
+          lsBatchSet(JSON.parse(textEl.value));
+          loadDanmaku(LOAD_TYPE.INIT);
+          closeEmbyDialog();
+        } catch (error) {
+          console.error('[设置导入] JSON 格式无效:', error);
+        }
       }
     }));
   }
@@ -4558,6 +4851,10 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var headerClockEle = getById('headerClock');
     if (!warpper) return;
     if (headerClockEle) headerClockEle.remove();
+    if ((_window$ede2 = window.ede) !== null && _window$ede2 !== void 0 && _window$ede2.clockIntervalId) {
+      clearInterval(window.ede.clockIntervalId);
+      window.ede.clockIntervalId = null;
+    }
     var clockElement = document.createElement('div');
     clockElement.id = 'headerClock';
     warpper.append(clockElement);
@@ -4570,14 +4867,16 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     }
     updateClock();
     var intervalId = setInterval(updateClock, 1000);
-    if ((_window$ede2 = window.ede) !== null && _window$ede2 !== void 0 && _window$ede2.destroyIntervalIds) {
-      window.ede.destroyIntervalIds.push(intervalId);
-    }
+    if (window.ede) window.ede.clockIntervalId = intervalId;
   }
   function removeHeaderClock() {
+    var _window$ede3;
     var headerClockEle = getById('headerClock');
     if (headerClockEle) headerClockEle.remove();
-    destroyAllInterval();
+    if ((_window$ede3 = window.ede) !== null && _window$ede3 !== void 0 && _window$ede3.clockIntervalId) {
+      clearInterval(window.ede.clockIntervalId);
+      window.ede.clockIntervalId = null;
+    }
   }
   function onVideoOsdShow(e) {
     console.log(e === null || e === void 0 ? void 0 : e.type, e);
@@ -4646,7 +4945,13 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var _bangumi_key = lsLocalKeys.bangumiEpInfoPrefix + episode_info.episodeId;
     var bangumiInfoLs = localStorage.getItem(_bangumi_key);
     if (bangumiInfoLs) {
-      bangumiInfoLs = JSON.parse(bangumiInfoLs);
+      try {
+        bangumiInfoLs = JSON.parse(bangumiInfoLs);
+      } catch (error) {
+        console.warn('[Bangumi] 关联缓存损坏，已清除:', error);
+        localStorage.removeItem(_bangumi_key);
+        bangumiInfoLs = null;
+      }
     }
     var bangumiEpsRes = bangumiInfoLs ? bangumiInfoLs.bangumiEpsRes : null;
     var subjectId = bangumiInfoLs ? bangumiInfoLs.subjectId : null;
@@ -4700,12 +5005,19 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var bangumiInfo = await getEpisodeBangumiRel();
     var subjectId = bangumiInfo.subjectId,
       bgmEpisodeIndex = bangumiInfo.bgmEpisodeIndex;
-    var episodeIndex = bgmEpisodeIndex ? bgmEpisodeIndex : bangumiInfo.episodeIndex;
+    var episodeIndex = bgmEpisodeIndex !== null && bgmEpisodeIndex !== void 0 ? bgmEpisodeIndex : bangumiInfo.episodeIndex;
     console.log('准备校验 Bangumi 条目收藏状态是否为看过');
     var bangumiMe = localStorage.getItem(lsLocalKeys.bangumiMe);
     if (bangumiMe) {
-      bangumiMe = JSON.parse(bangumiMe);
-    } else {
+      try {
+        bangumiMe = JSON.parse(bangumiMe);
+      } catch (error) {
+        console.warn('[Bangumi] 用户缓存损坏，已清除:', error);
+        localStorage.removeItem(lsLocalKeys.bangumiMe);
+        bangumiMe = null;
+      }
+    }
+    if (!bangumiMe) {
       bangumiMe = await fetchBangumiApiGetMe(token);
     }
     var msg = '';
@@ -4835,11 +5147,14 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var episodeTitle = episode_info.episodeTitle,
       animeId = episode_info.animeId,
       animeTitle = episode_info.animeTitle;
-      episode_info.apiName;
     var loadSum = window.ede ? getDanmakuComments(window.ede).length : 0;
     var downloadSum = ((_window$ede2 = window.ede) === null || _window$ede2 === void 0 || (_window$ede2 = _window$ede2.commentsParsed) === null || _window$ede2 === void 0 ? void 0 : _window$ede2.length) || 0;
-    var template = "\n        <div style=\"display: flex;\">\n            <div id=\"".concat(eleIds.posterImgDiv, "\"></div>\n            <div>\n                <div>\n                    <label class=\"").concat(classes.embyLabel, "\">\u5A92\u4F53\u540D: </label>\n                    <div class=\"").concat(classes.embyFieldDesc, "\">").concat(animeTitle || '-', "</div>\n                </div>\n                ").concat(episodeTitle ? "<div><label class=\"".concat(classes.embyLabel, "\">\u7AE0\u8282\u540D: </label><div class=\"").concat(classes.embyFieldDesc, "\">").concat(episodeTitle, "</div></div>") : '', "\n                <div>\n                    <label class=\"").concat(classes.embyLabel, "\">\u5176\u5B83\u4FE1\u606F: </label>\n                    <div class=\"").concat(classes.embyFieldDesc, "\">\u83B7\u53D6\u603B\u6570: ").concat(downloadSum, ", \u52A0\u8F7D\u603B\u6570: ").concat(loadSum, ", \u88AB\u8FC7\u6EE4\u6570: ").concat(downloadSum - loadSum, "</div>\n                </div>\n            </div>\n        </div>\n        <div style=\"margin-top: 2%;\">\n            <label class=\"").concat(classes.embyLabel, "\">").concat(lsKeys.danmuList.name, ": </label>\n            <div id=\"").concat(eleIds.danmuListDiv, "\" style=\"margin: 1% 0;\"></div>\n        </div>\n        <div id=\"").concat(eleIds.extInfoCtrlDiv, "\" style=\"margin: 0.6em 0;\"></div>\n        <div id=\"").concat(eleIds.extInfoDiv, "\" hidden>\n            <label class=\"").concat(classes.embyLabel, "\">Bangumi \u89D2\u8272\u4ECB\u7ECD: </label>\n            <div id=\"").concat(eleIds.characterImgHeihtDiv, "\" style=\"width: 36.5em; text-align: center;\"></div>\n            <div id=\"").concat(eleIds.charactersDiv, "\" style=\"display: flex; flex-wrap: wrap;\"></div>\n        </div>\n    ");
+    var template = "\n        <div style=\"display: flex;\">\n            <div id=\"".concat(eleIds.posterImgDiv, "\"></div>\n            <div>\n                <div>\n                    <label class=\"").concat(classes.embyLabel, "\">\u5A92\u4F53\u540D: </label>\n                    <div class=\"").concat(classes.embyFieldDesc, "\" data-ede-anime-title></div>\n                </div>\n                <div data-ede-episode-row>\n                    <label class=\"").concat(classes.embyLabel, "\">\u7AE0\u8282\u540D: </label>\n                    <div class=\"").concat(classes.embyFieldDesc, "\" data-ede-episode-title></div>\n                </div>\n                <div>\n                    <label class=\"").concat(classes.embyLabel, "\">\u5176\u5B83\u4FE1\u606F: </label>\n                    <div class=\"").concat(classes.embyFieldDesc, "\">\u83B7\u53D6\u603B\u6570: ").concat(downloadSum, ", \u52A0\u8F7D\u603B\u6570: ").concat(loadSum, ", \u88AB\u8FC7\u6EE4\u6570: ").concat(downloadSum - loadSum, "</div>\n                </div>\n            </div>\n        </div>\n        <div style=\"margin-top: 2%;\">\n            <label class=\"").concat(classes.embyLabel, "\">").concat(lsKeys.danmuList.name, ": </label>\n            <div id=\"").concat(eleIds.danmuListDiv, "\" style=\"margin: 1% 0;\"></div>\n        </div>\n        <div id=\"").concat(eleIds.extInfoCtrlDiv, "\" style=\"margin: 0.6em 0;\"></div>\n        <div id=\"").concat(eleIds.extInfoDiv, "\" hidden>\n            <label class=\"").concat(classes.embyLabel, "\">Bangumi \u89D2\u8272\u4ECB\u7ECD: </label>\n            <div id=\"").concat(eleIds.characterImgHeihtDiv, "\" style=\"width: 36.5em; text-align: center;\"></div>\n            <div id=\"").concat(eleIds.charactersDiv, "\" style=\"display: flex; flex-wrap: wrap;\"></div>\n        </div>\n    ");
     container.innerHTML = template.trim();
+    container.querySelector('[data-ede-anime-title]').textContent = animeTitle || '-';
+    var episodeRow = container.querySelector('[data-ede-episode-row]');
+    episodeRow.hidden = !episodeTitle;
+    episodeRow.querySelector('[data-ede-episode-title]').textContent = episodeTitle || '';
     if (animeId) {
       getById(eleIds.posterImgDiv, container).append(embyImgButton(embyImg(dandanplayApi.posterImg(animeId)), 'width: calc((var(--videoosd-tabs-height) - 3em) * (2 / 3)); margin-right: 1em;'));
     }
@@ -4909,117 +5224,132 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     appendvideoOsdDanmakuInfo: appendvideoOsdDanmakuInfo
   };
   async function doDanmakuSearchEpisode() {
-    var _allAnimes$selectAnim;
-    var embySearch = getById(eleIds.danmakuSearchName);
-    if (!embySearch) return;
-    var searchName = embySearch.value.trim();
-    var danmakuRemarkEle = getById(eleIds.danmakuRemark);
-    if (danmakuRemarkEle) {
-      danmakuRemarkEle.parentNode.hidden = false;
-      danmakuRemarkEle.innerText = searchName ? '' : '请填写标题';
-    }
-    var spinnerEle = getByClass(classes.mdlSpinner);
-    if (spinnerEle) spinnerEle.classList.remove('hide');
-    var apiPriority = lsGetItem(lsKeys.apiPriority.id);
-    var apiConfigs = {
-      official: {
-        name: '官方API',
-        prefix: corsProxy + 'https://api.dandanplay.net/api/v2',
-        enabled: lsGetItem(lsKeys.useOfficialApi.id)
-      },
-      custom: {
-        name: '自定义API',
-        prefix: lsGetItem(lsKeys.customApiPrefix.id),
-        enabled: lsGetItem(lsKeys.useCustomApi.id)
-      }
-    };
-    var allAnimes = [];
-    var _iterator = _createForOfIteratorHelper(apiPriority),
-      _step;
+    var session = beginLoadSession(window.ede);
     try {
-      var _loop = async function _loop() {
-        var apiKey = _step.value;
-        var config = apiConfigs[apiKey];
-        if (!config || !config.enabled || apiKey === 'custom' && !config.prefix) return 1; // continue
-        var manualSearchTitle = searchName;
-        var manualSearchEpisode = null;
-        if (apiKey === 'official') {
-          var parsed = parseAnimeName(searchName);
-          if (parsed.season !== null) {
-            manualSearchTitle = parsed.season === 1 ? parsed.title : "".concat(parsed.title, " \u7B2C").concat(parsed.season, "\u5B63");
-            manualSearchEpisode = parsed.episode;
-            console.log("[\u624B\u52A8\u5339\u914D][\u5B98\u65B9API\u4F18\u5316] \u683C\u5F0F\u5316\u641C\u7D22: \u6807\u9898='".concat(manualSearchTitle, "', \u96C6\u6570=").concat(manualSearchEpisode));
-          }
-        }
-        console.log("[\u624B\u52A8\u5339\u914D][".concat(config.name, "] \u6B63\u5728\u641C\u7D22: \u6807\u9898='").concat(manualSearchTitle, "', \u96C6\u6570=").concat(manualSearchEpisode || '无'));
-        var animaInfo = await fetchSearchEpisodes(manualSearchTitle, manualSearchEpisode, config.prefix);
-        if (animaInfo && animaInfo.animes.length > 0) {
-          var _allAnimes;
-          console.log("[\u624B\u52A8\u5339\u914D][".concat(config.name, "] \u641C\u7D22\u6210\u529F\uFF0C\u627E\u5230 ").concat(animaInfo.animes.length, " \u4E2A\u7ED3\u679C\u3002"));
-          animaInfo.animes.forEach(function (anime) {
-            anime.apiPrefix = config.prefix;
-            anime.apiName = config.name;
-          });
-          (_allAnimes = allAnimes).push.apply(_allAnimes, _toConsumableArray(animaInfo.animes));
-        } else {
-          console.log("[\u624B\u52A8\u5339\u914D][".concat(config.name, "] \u672A\u627E\u5230\u7ED3\u679C\u3002"));
+      var _allAnimes$selectAnim;
+      var embySearch = getById(eleIds.danmakuSearchName);
+      if (!embySearch) return;
+      var searchName = embySearch.value.trim();
+      var danmakuRemarkEle = getById(eleIds.danmakuRemark);
+      if (danmakuRemarkEle) {
+        danmakuRemarkEle.parentNode.hidden = false;
+        danmakuRemarkEle.innerText = searchName ? '' : '请填写标题';
+      }
+      var spinnerEle = getByClass(classes.mdlSpinner);
+      if (spinnerEle) spinnerEle.classList.remove('hide');
+      var apiPriority = lsGetItem(lsKeys.apiPriority.id);
+      var apiConfigs = {
+        official: {
+          name: '官方API',
+          prefix: corsProxy + 'https://api.dandanplay.net/api/v2',
+          enabled: lsGetItem(lsKeys.useOfficialApi.id)
+        },
+        custom: {
+          name: '自定义API',
+          prefix: lsGetItem(lsKeys.customApiPrefix.id),
+          enabled: lsGetItem(lsKeys.useCustomApi.id)
         }
       };
-      for (_iterator.s(); !(_step = _iterator.n()).done;) {
-        if (await _loop()) continue;
+      var allAnimes = [];
+      var _iterator = _createForOfIteratorHelper(apiPriority),
+        _step;
+      try {
+        var _loop = async function _loop() {
+          var apiKey = _step.value;
+          var config = apiConfigs[apiKey];
+          if (!config || !config.enabled || apiKey === 'custom' && !config.prefix) return 1; // continue
+          var manualSearchTitle = searchName;
+          var manualSearchEpisode = null;
+          if (apiKey === 'official') {
+            var parsed = parseAnimeName(searchName);
+            if (parsed.season !== null) {
+              manualSearchTitle = parsed.season === 1 ? parsed.title : "".concat(parsed.title, " \u7B2C").concat(parsed.season, "\u5B63");
+              manualSearchEpisode = parsed.episode;
+              console.log("[\u624B\u52A8\u5339\u914D][\u5B98\u65B9API\u4F18\u5316] \u683C\u5F0F\u5316\u641C\u7D22: \u6807\u9898='".concat(manualSearchTitle, "', \u96C6\u6570=").concat(manualSearchEpisode));
+            }
+          }
+          console.log("[\u624B\u52A8\u5339\u914D][".concat(config.name, "] \u6B63\u5728\u641C\u7D22: \u6807\u9898='").concat(manualSearchTitle, "', \u96C6\u6570=").concat(manualSearchEpisode || '无'));
+          var animaInfo = await fetchSearchEpisodes(manualSearchTitle, manualSearchEpisode, config.prefix, session.controller.signal);
+          assertLoadSession(window.ede, session);
+          if (animaInfo && animaInfo.animes.length > 0) {
+            var _allAnimes;
+            console.log("[\u624B\u52A8\u5339\u914D][".concat(config.name, "] \u641C\u7D22\u6210\u529F\uFF0C\u627E\u5230 ").concat(animaInfo.animes.length, " \u4E2A\u7ED3\u679C\u3002"));
+            animaInfo.animes.forEach(function (anime) {
+              anime.apiPrefix = config.prefix;
+              anime.apiName = config.name;
+            });
+            (_allAnimes = allAnimes).push.apply(_allAnimes, _toConsumableArray(animaInfo.animes));
+          } else {
+            console.log("[\u624B\u52A8\u5339\u914D][".concat(config.name, "] \u672A\u627E\u5230\u7ED3\u679C\u3002"));
+          }
+        };
+        for (_iterator.s(); !(_step = _iterator.n()).done;) {
+          if (await _loop()) continue;
+        }
+      } catch (err) {
+        _iterator.e(err);
+      } finally {
+        _iterator.f();
       }
-    } catch (err) {
-      _iterator.e(err);
+      if (spinnerEle) spinnerEle.classList.add('hide');
+      if (allAnimes.length < 1) {
+        if (danmakuRemarkEle) danmakuRemarkEle.innerText = '搜索结果为空';
+        var _switchBtn = getById(eleIds.danmakuSwitchEpisode);
+        if (_switchBtn) _switchBtn.disabled = true;
+        var _episodeFlag = getById(eleIds.danmakuEpisodeFlag);
+        if (_episodeFlag) _episodeFlag.hidden = true;
+        return;
+      }
+      if (danmakuRemarkEle) danmakuRemarkEle.innerText = '';
+      allAnimes = prioritizeSeasonCandidates(searchName, allAnimes);
+      var danmakuAnimeDiv = getById(eleIds.danmakuAnimeDiv);
+      var danmakuEpisodeNumDiv = getById(eleIds.danmakuEpisodeNumDiv);
+      if (!danmakuAnimeDiv || !danmakuEpisodeNumDiv) return;
+      danmakuAnimeDiv.innerHTML = '';
+      danmakuEpisodeNumDiv.innerHTML = '';
+      window.ede.searchDanmakuOpts.animes = allAnimes;
+      var selectAnimeIdx = allAnimes.findIndex(function (anime) {
+        return anime.animeId == window.ede.searchDanmakuOpts.animeId;
+      });
+      selectAnimeIdx = selectAnimeIdx !== -1 ? selectAnimeIdx : 0;
+      var animeSelect = embySelect({
+        id: eleIds.danmakuAnimeSelect,
+        label: '剧集: ',
+        style: 'width: auto;max-width: 100%;'
+      }, selectAnimeIdx, allAnimes, 'animeId', function (opt) {
+        return "".concat(opt.animeTitle, " \u7C7B\u578B\uFF1A").concat(opt.typeDescription, " \u6765\u6E90\uFF1A").concat(opt.apiName);
+      }, doDanmakuAnimeSelect);
+      danmakuAnimeDiv.append(animeSelect);
+      var episodes = ((_allAnimes$selectAnim = allAnimes[selectAnimeIdx]) === null || _allAnimes$selectAnim === void 0 ? void 0 : _allAnimes$selectAnim.episodes) || [];
+      var episodeNumSelect = embySelect({
+        id: eleIds.danmakuEpisodeNumSelect,
+        label: '集数: ',
+        style: 'width: auto;max-width: 100%;'
+      }, window.ede.searchDanmakuOpts.episode - 1, episodes, 'episodeId', function (opt, i) {
+        return "".concat(i + 1, " - ").concat(opt.episodeTitle);
+      });
+      danmakuEpisodeNumDiv.append(episodeNumSelect);
+      var episodeFlag = getById(eleIds.danmakuEpisodeFlag);
+      if (episodeFlag) episodeFlag.hidden = false;
+      var switchBtn = getById(eleIds.danmakuSwitchEpisode);
+      if (switchBtn) switchBtn.disabled = false;
+      var selectedAnime = allAnimes[selectAnimeIdx];
+      var searchImg = getById(eleIds.searchImg);
+      if (searchImg) searchImg.src = selectedAnime.imageUrl || dandanplayApi.posterImg(selectedAnime.animeId);
+      var apiSourceDiv = getById(eleIds.searchApiSource);
+      if (apiSourceDiv) apiSourceDiv.innerText = "\u6765\u6E90: ".concat(selectedAnime.apiName);
+    } catch (error) {
+      if ((error === null || error === void 0 ? void 0 : error.name) !== 'AbortError') {
+        console.error('手动搜索弹幕失败:', error);
+        embyToast({
+          text: "\u624B\u52A8\u641C\u7D22\u5F39\u5E55\u5931\u8D25: ".concat(error.message || error)
+        });
+      }
     } finally {
-      _iterator.f();
+      var activeSpinner = getByClass(classes.mdlSpinner);
+      if (activeSpinner) activeSpinner.classList.add('hide');
+      finishLoadSession(window.ede, session);
     }
-    if (spinnerEle) spinnerEle.classList.add('hide');
-    if (allAnimes.length < 1) {
-      if (danmakuRemarkEle) danmakuRemarkEle.innerText = '搜索结果为空';
-      var _switchBtn = getById(eleIds.danmakuSwitchEpisode);
-      if (_switchBtn) _switchBtn.disabled = true;
-      var _episodeFlag = getById(eleIds.danmakuEpisodeFlag);
-      if (_episodeFlag) _episodeFlag.hidden = true;
-      return;
-    }
-    if (danmakuRemarkEle) danmakuRemarkEle.innerText = '';
-    allAnimes = prioritizeSeasonCandidates(searchName, allAnimes);
-    var danmakuAnimeDiv = getById(eleIds.danmakuAnimeDiv);
-    var danmakuEpisodeNumDiv = getById(eleIds.danmakuEpisodeNumDiv);
-    if (!danmakuAnimeDiv || !danmakuEpisodeNumDiv) return;
-    danmakuAnimeDiv.innerHTML = '';
-    danmakuEpisodeNumDiv.innerHTML = '';
-    window.ede.searchDanmakuOpts.animes = allAnimes;
-    var selectAnimeIdx = allAnimes.findIndex(function (anime) {
-      return anime.animeId == window.ede.searchDanmakuOpts.animeId;
-    });
-    selectAnimeIdx = selectAnimeIdx !== -1 ? selectAnimeIdx : 0;
-    var animeSelect = embySelect({
-      id: eleIds.danmakuAnimeSelect,
-      label: '剧集: ',
-      style: 'width: auto;max-width: 100%;'
-    }, selectAnimeIdx, allAnimes, 'animeId', function (opt) {
-      return "".concat(opt.animeTitle, " \u7C7B\u578B\uFF1A").concat(opt.typeDescription, " \u6765\u6E90\uFF1A").concat(opt.apiName);
-    }, doDanmakuAnimeSelect);
-    danmakuAnimeDiv.append(animeSelect);
-    var episodes = ((_allAnimes$selectAnim = allAnimes[selectAnimeIdx]) === null || _allAnimes$selectAnim === void 0 ? void 0 : _allAnimes$selectAnim.episodes) || [];
-    var episodeNumSelect = embySelect({
-      id: eleIds.danmakuEpisodeNumSelect,
-      label: '集数: ',
-      style: 'width: auto;max-width: 100%;'
-    }, window.ede.searchDanmakuOpts.episode - 1, episodes, 'episodeId', function (opt, i) {
-      return "".concat(i + 1, " - ").concat(opt.episodeTitle);
-    });
-    danmakuEpisodeNumDiv.append(episodeNumSelect);
-    var episodeFlag = getById(eleIds.danmakuEpisodeFlag);
-    if (episodeFlag) episodeFlag.hidden = false;
-    var switchBtn = getById(eleIds.danmakuSwitchEpisode);
-    if (switchBtn) switchBtn.disabled = false;
-    var selectedAnime = allAnimes[selectAnimeIdx];
-    var searchImg = getById(eleIds.searchImg);
-    if (searchImg) searchImg.src = selectedAnime.imageUrl || dandanplayApi.posterImg(selectedAnime.animeId);
-    var apiSourceDiv = getById(eleIds.searchApiSource);
-    if (apiSourceDiv) apiSourceDiv.innerText = "\u6765\u6E90: ".concat(selectedAnime.apiName);
   }
   function doSearchTitleSwtich(e) {
     var searchInputEle = getById(eleIds.danmakuSearchName);
@@ -5032,8 +5362,15 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var _window$ede$searchDan = window.ede.searchDanmakuOpts,
       _episode_key = _window$ede$searchDan._episode_key,
       seriesOrMovieId = _window$ede$searchDan.seriesOrMovieId;
-    var episode_info = JSON.parse(localStorage.getItem(_episode_key) || '{}');
-    var animeOriginalTitle = episode_info.animeOriginalTitle;
+    var episode_info = {};
+    try {
+      episode_info = JSON.parse(localStorage.getItem(_episode_key) || '{}');
+    } catch (error) {
+      console.warn('[手动匹配] 剧集缓存损坏，已忽略:', error);
+      localStorage.removeItem(_episode_key);
+    }
+    var _episode_info = episode_info,
+      animeOriginalTitle = _episode_info.animeOriginalTitle;
     if (animeOriginalTitle) {
       e.target.setAttribute(attrKey, '1');
       searchInputEle.value = animeOriginalTitle;
@@ -5069,7 +5406,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     var apiSourceDiv = getById(eleIds.searchApiSource);
     if (apiSourceDiv) apiSourceDiv.innerText = "\u6765\u6E90: ".concat(anime.apiName);
   }
-  function doDanmakuSwitchEpisode() {
+  async function doDanmakuSwitchEpisode() {
     var _anime$episodes;
     var animeSelect = getById(eleIds.danmakuAnimeSelect);
     var episodeNumSelect = getById(eleIds.danmakuEpisodeNumSelect);
@@ -5144,25 +5481,31 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     }
     window.ede.previous_episode_info = _objectSpread2({}, window.ede.episode_info);
     console.log('手动匹配成功，直接加载所选弹幕:', episodeInfo);
-    window.ede.loading = false;
+    var session = beginLoadSession(window.ede);
     window.ede.onlineDanmakuOk = true;
-    fetchComment(episodeInfo.episodeId).then(function (comments) {
+    closeEmbyDialog();
+    try {
+      var comments = await fetchComment(episodeInfo.episodeId, session.controller.signal);
+      assertLoadSession(window.ede, session);
       if (!(comments !== null && comments !== void 0 && comments.length)) throw new Error('所选剧集没有可用弹幕');
       window.ede.danmuCache[episodeInfo.episodeId] = comments;
-      return createDanmaku(comments, createDanmakuHooks$1);
-    }).then(function () {
+      await createDanmaku(comments, _objectSpread2(_objectSpread2({}, createDanmakuHooks$1), {}, {
+        session: session
+      }));
+      assertLoadSession(window.ede, session);
       var ctr = getById(eleIds.danmakuCtr);
       if (ctr) ctr.style.opacity = '1';
       appendvideoOsdDanmakuInfo(window.ede.commentsParsed.length);
-    }).catch(function (error) {
-      console.error('手动匹配弹幕加载失败:', error);
-      embyToast({
-        text: "\u624B\u52A8\u5339\u914D\u5F39\u5E55\u52A0\u8F7D\u5931\u8D25: ".concat(error.message || error)
-      });
-    }).finally(function () {
-      window.ede.loading = false;
-    });
-    closeEmbyDialog();
+    } catch (error) {
+      if ((error === null || error === void 0 ? void 0 : error.name) !== 'AbortError') {
+        console.error('手动匹配弹幕加载失败:', error);
+        embyToast({
+          text: "\u624B\u52A8\u5339\u914D\u5F39\u5E55\u52A0\u8F7D\u5931\u8D25: ".concat(error.message || error)
+        });
+      }
+    } finally {
+      finishLoadSession(window.ede, session);
+    }
   }
   function bindManualMatchButtons() {
     var btnClearCache = getById(eleIds.clearLocalMatchCacheBtn);
@@ -5272,30 +5615,42 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     addExtComments(extUrl);
   }
   async function addExtComments(extUrl, extComments) {
-    var _window$ede$danmuCach2;
-    var episode_info = window.ede.episode_info;
-    var episodeId = (episode_info === null || episode_info === void 0 ? void 0 : episode_info.episodeId) || null;
-    var comments = ((_window$ede$danmuCach2 = window.ede.danmuCache) === null || _window$ede$danmuCach2 === void 0 ? void 0 : _window$ede$danmuCach2[episodeId]) || [];
-    if (!extComments) {
-      extComments = await fetchExtcommentActual(extUrl, comments);
-    }
-    if (extComments.length === 0) {
+    var session = beginLoadSession(window.ede);
+    try {
+      var _window$ede$danmuCach2, _window$ede$extCommen2;
+      var episode_info = window.ede.episode_info;
+      var episodeId = (episode_info === null || episode_info === void 0 ? void 0 : episode_info.episodeId) || null;
+      var comments = ((_window$ede$danmuCach2 = window.ede.danmuCache) === null || _window$ede$danmuCach2 === void 0 ? void 0 : _window$ede$danmuCach2[episodeId]) || [];
+      if (!extComments) {
+        extComments = await fetchExtcommentActual(extUrl, comments, session.controller.signal, session);
+      }
+      assertLoadSession(window.ede, session);
+      if (extComments.length === 0) {
+        embyToast({
+          text: '附加弹幕不能为空!'
+        });
+        return;
+      }
+      var extCommentCache = ((_window$ede$extCommen2 = window.ede.extCommentCache) === null || _window$ede$extCommen2 === void 0 ? void 0 : _window$ede$extCommen2[window.ede.itemId]) || {};
+      var _await$aggregateExtCo = await aggregateExtComments(comments, objectEntries(extCommentCache), fetchExtcommentActual, session.controller.signal, session),
+        allComments = _await$aggregateExtCo.comments,
+        failedCount = _await$aggregateExtCo.failedCount;
+      if (failedCount > 0) console.warn("[\u9644\u52A0\u5F39\u5E55] ".concat(failedCount, " \u4E2A\u6765\u6E90\u805A\u5408\u5931\u8D25"));
+      await createDanmaku(allComments, _objectSpread2(_objectSpread2({}, createDanmakuHooks$1), {}, {
+        session: session
+      }));
+      assertLoadSession(window.ede, session);
+      var beforeLength = comments.length;
       embyToast({
-        text: '附加弹幕不能为空!'
-      });
-      return;
-    }
-    var allComments = comments.concat(extComments);
-    createDanmaku(allComments, createDanmakuHooks$1).then(function () {
-      var beforeLength = window.ede.commentsParsed.length - extComments.length;
-      embyToast({
-        text: "\u6B64\u6B21\u9644\u52A0\u603B\u91CF: ".concat(extComments.length, ", \u9644\u52A0\u524D\u603B\u91CF: ").concat(beforeLength, ", \u9644\u52A0\u540E\u603B\u91CF: ").concat(allComments.length)
+        text: "\u6B64\u6B21\u9644\u52A0\u603B\u91CF: ".concat(extComments.length, ", \u4E3B\u6E90\u603B\u91CF: ").concat(beforeLength, ", \u805A\u5408\u540E\u603B\u91CF: ").concat(allComments.length)
       });
       console.log("\u9644\u52A0\u5F39\u5E55\u5C31\u4F4D, \u9644\u52A0\u524D\u603B\u91CF: ".concat(beforeLength));
       buildExtUrlsDiv();
-    }).catch(function (err) {
-      return console.log(err);
-    });
+    } catch (error) {
+      if ((error === null || error === void 0 ? void 0 : error.name) !== 'AbortError') console.error('[附加弹幕] 加载失败:', error);
+    } finally {
+      finishLoadSession(window.ede, session);
+    }
   }
   function buildExtCommentDiv() {
     var extCommentSearchDiv = getById(eleIds.extCommentSearchDiv);
@@ -5390,6 +5745,16 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * 自定义 URL 配置（从 localStorage 应用用户设置）
    */
   var customeUrlMsg1 = '限弹弹 play API 兼容结构';
+
+  // 兼容历史高级配置：用户可在 localStorage 中保存模板字符串。
+  // 此入口刻意集中保留动态执行，调用方只传入下列白名单变量；不要用于任何远端响应内容。
+  function evaluateLegacyUrlTemplate(template, variables) {
+    variables.episodeId;
+      variables.chConvert;
+      variables.url;
+      variables.animeId;
+    return eval('`' + template + '`');
+  }
   var customeUrl = {
     init: function init() {
       customeUrl.mapping.forEach(function (obj) {
@@ -5417,7 +5782,10 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       lsKey: lsKeys.customeGetCommentUrl,
       rewrite: function rewrite(tl) {
         dandanplayApi.getComment = function (episodeId, chConvert) {
-          return eval('`' + tl + '`');
+          return evaluateLegacyUrlTemplate(tl, {
+            episodeId: episodeId,
+            chConvert: chConvert
+          });
         };
       },
       msg1: customeUrlMsg1,
@@ -5427,7 +5795,9 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       lsKey: lsKeys.customeGetExtcommentUrl,
       rewrite: function rewrite(tl) {
         dandanplayApi.getExtcomment = function (url) {
-          return eval('`' + tl + '`');
+          return evaluateLegacyUrlTemplate(tl, {
+            url: url
+          });
         };
       },
       msg1: customeUrlMsg1,
@@ -5437,7 +5807,9 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       lsKey: lsKeys.customePosterImgUrl,
       rewrite: function rewrite(tl) {
         dandanplayApi.posterImg = function (animeId) {
-          return eval('`' + tl + '`');
+          return evaluateLegacyUrlTemplate(tl, {
+            animeId: animeId
+          });
         };
       },
       msg1: customeUrlMsg1,
@@ -6314,62 +6686,15 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
   }];
 
   /**
+   * 弹窗相关
+   * 从 ede.js 迁移，未修改原有实现逻辑
+   */
+
+  /**
    * 调用 Emby 原生 dialog 模块
    * @param {object} opts - { text, title, timeout, html, buttons }
    * @returns {Promise}
    */
-  async function embyDialog() {
-    var opts = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
-    var defaultOpts = {
-      text: '',
-      title: '',
-      timeout: 0,
-      html: '',
-      buttons: []
-    };
-    opts = _objectSpread2(_objectSpread2({}, defaultOpts), opts);
-    if (typeof require === 'function') {
-      return require(['dialog']).then(function (items) {
-        return items[0](opts);
-      }).catch(function (error) {
-        console.log('点击弹出框外部取消: ' + error);
-      });
-    }
-    return Promise.reject(new Error('Emby require not available'));
-  }
-
-  /**
-   * 关闭当前弹窗
-   */
-  function closeEmbyDialog() {
-    var footerItem = getByClass(classes.formDialogFooterItem);
-    if (footerItem) {
-      footerItem.dispatchEvent(new Event('click'));
-    }
-  }
-
-  /**
-   * 调用 Emby 原生 toast 模块
-   * @param {object} opts - { text, secondaryText, icon, iconStrikeThrough }
-   * @returns {Promise}
-   */
-  async function embyToast() {
-    var opts = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
-    var defaultOpts = {
-      text: '',
-      secondaryText: '',
-      icon: '',
-      iconStrikeThrough: false
-    };
-    opts = _objectSpread2(_objectSpread2({}, defaultOpts), opts);
-    if (typeof require === 'function') {
-      return require(['toast'], function (toast) {
-        return toast(opts);
-      });
-    }
-    return Promise.reject(new Error('Emby require not available'));
-  }
-
   /**
    * 弹窗容器就绪后的回调，构建 Tab 内容
    * @param {HTMLElement} dialogContainer
@@ -6533,7 +6858,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       if ((_window$ede4 = window.ede) !== null && _window$ede4 !== void 0 && _window$ede4.episode_info) window.ede.episode_info = null;
       return;
     }
-    if (_media.getAttribute('ede_listening')) return;
+    var alreadyListening = _media.getAttribute('ede_listening') === 'true';
     console.log('正在初始化Listener');
     if (handlers.playbackEventsRefresh && handlers.onPlaybackStart) {
       handlers.playbackEventsRefresh({
@@ -6546,6 +6871,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       });
     }
     _media.setAttribute('ede_listening', 'true');
+    if (window.ede) window.ede.listeningMedia = _media;
     if (handlers.refreshEventListener) {
       if (handlers.onVideoOsdShow) handlers.refreshEventListener({
         'video-osd-show': handlers.onVideoOsdShow
@@ -6555,6 +6881,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
       });
     }
     console.log('Listener初始化完成');
+    if (alreadyListening) return;
     if (((_OS$isAndroidEmbyNois = OS.isAndroidEmbyNoisyX) !== null && _OS$isAndroidEmbyNois !== void 0 && _OS$isAndroidEmbyNois.call(OS) || (_OS$isEmbyUWP = OS.isEmbyUWP) !== null && _OS$isEmbyUWP !== void 0 && _OS$isEmbyUWP.call(OS)) && handlers.loadDanmaku) {
       handlers.loadDanmaku('init');
     }
@@ -6689,6 +7016,7 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    */
   function onPlaybackStart(e, state) {
     console.log(e === null || e === void 0 ? void 0 : e.type);
+    syncPlaybackItemSession(window.ede, state);
     loadDanmaku(LOAD_TYPE.INIT);
   }
 
@@ -6703,12 +7031,6 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
     }
     danmakuAutoFilterCancel();
   }
-
-  /**
-   * H5 视频适配器
-   * 魔改版客户端（NativePlayer 等）无 <video> 时，创建虚拟 video 并同步播放状态
-   * 从 ede.js 5113-5180 行迁移
-   */
 
   /**
    * 平滑补充 <video> timeupdate 中秒级间隔缺失的 100ms 间隙
@@ -6732,48 +7054,61 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * 当播放页没有 <video> 时，创建虚拟 video 并同步 Native 播放器状态
    */
   async function initH5VideoAdapter() {
+    var ede = window.ede;
+    var viewGeneration = ede === null || ede === void 0 ? void 0 : ede.viewGeneration;
+    var isCurrentView = function isCurrentView() {
+      return ede && window.ede === ede && ede.viewGeneration === viewGeneration;
+    };
     var _media = document.querySelector(mediaQueryStr);
-    if (_media) {
-      if (_media.id === eleIds.h5VideoAdapter) {
-        videoTimeUpdateInterval(_media, true);
+    if (_media && _media.id !== eleIds.h5VideoAdapter) return;
+    if (!_media) {
+      console.log('播放页不存在 video 标签,适配器处理开始');
+      _media = document.createElement('video');
+      if (OS.isApple()) {
+        _media.src = '';
       }
+      _media.style.display = 'none';
+      _media.id = eleIds.h5VideoAdapter;
+      _media.classList.add('htmlvideoplayer', 'moveUpSubtitles');
+      document.body.prepend(_media);
+    }
+    await Promise.resolve(_media.play()).catch(function (error) {
+      console.warn('虚拟 video 自动播放被拒绝，将继续同步播放器事件:', error);
+    });
+    if (!isCurrentView()) {
+      videoTimeUpdateInterval(_media, false);
+      _media.remove();
       return;
     }
-    console.log('播放页不存在 video 标签,适配器处理开始');
-    _media = document.createElement('video');
-    if (OS.isApple()) {
-      _media.src = '';
-    }
-    _media.style.display = 'none';
-    _media.id = eleIds.h5VideoAdapter;
-    _media.classList.add('htmlvideoplayer', 'moveUpSubtitles');
-    document.body.prepend(_media);
-    _media.play();
     videoTimeUpdateInterval(_media, true);
     if (typeof require !== 'function') {
       console.warn('initH5VideoAdapter: require 不可用，跳过 playbackManager 同步');
       return;
     }
-    require(['playbackManager'], function (playbackManager) {
-      playbackEventsRefresh({
-        timeupdate: function timeupdate() {
-          var _playbackManager$getP;
-          var realCurrentTime = playbackManager.currentTime(playbackManager.getCurrentPlayer()) / 1e7;
-          var mediaTime = _media.currentTime;
-          _media.currentTime = realCurrentTime;
-          var embyPlaybackRate = (_playbackManager$getP = playbackManager.getPlayerState) === null || _playbackManager$getP === void 0 || (_playbackManager$getP = _playbackManager$getP.call(playbackManager)) === null || _playbackManager$getP === void 0 || (_playbackManager$getP = _playbackManager$getP.PlayState) === null || _playbackManager$getP === void 0 ? void 0 : _playbackManager$getP.PlaybackRate;
-          _media.playbackRate = embyPlaybackRate ? embyPlaybackRate : 1;
-          if (Math.abs(mediaTime - realCurrentTime) > 2) {
-            _media.dispatchEvent(new Event('seeking'));
-            console.warn('seeking', realCurrentTime, mediaTime);
-          }
-          if (lsGetItem(lsKeys.debugH5VideoAdapterEnable.id)) {
-            console.warn("".concat(eleIds.h5VideoAdapter, ", currentTime: ").concat(_media.currentTime, ", playbackRate: ").concat(_media.playbackRate));
-          }
+    var _await$require = await require(['playbackManager']),
+      _await$require2 = _slicedToArray(_await$require, 1),
+      playbackManager = _await$require2[0];
+    if (!isCurrentView()) {
+      videoTimeUpdateInterval(_media, false);
+      _media.remove();
+      return;
+    }
+    await playbackEventsRefresh({
+      timeupdate: function timeupdate() {
+        var _playbackManager$getP;
+        var realCurrentTime = playbackManager.currentTime(playbackManager.getCurrentPlayer()) / 1e7;
+        var mediaTime = _media.currentTime;
+        _media.currentTime = realCurrentTime;
+        var embyPlaybackRate = (_playbackManager$getP = playbackManager.getPlayerState) === null || _playbackManager$getP === void 0 || (_playbackManager$getP = _playbackManager$getP.call(playbackManager)) === null || _playbackManager$getP === void 0 || (_playbackManager$getP = _playbackManager$getP.PlayState) === null || _playbackManager$getP === void 0 ? void 0 : _playbackManager$getP.PlaybackRate;
+        _media.playbackRate = embyPlaybackRate || 1;
+        if (Math.abs(mediaTime - realCurrentTime) > 2) {
+          _media.dispatchEvent(new Event('seeking'));
+          console.warn('seeking', realCurrentTime, mediaTime);
         }
-      });
-    });
-    playbackEventsRefresh({
+        if (lsGetItem(lsKeys.debugH5VideoAdapterEnable.id)) {
+          console.warn("".concat(eleIds.h5VideoAdapter, ", currentTime: ").concat(_media.currentTime, ", playbackRate: ").concat(_media.playbackRate));
+        }
+      },
       pause: function pause() {
         console.warn('pause');
         _media.dispatchEvent(new Event('pause'));
@@ -6796,14 +7131,31 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * 退出播放页时清理
    */
   function beforeDestroy(e) {
-    var _e$detail, _window$ede;
+    var _e$detail, _window$ede, _window$ede2, _window$ede3;
     if ((e === null || e === void 0 || (_e$detail = e.detail) === null || _e$detail === void 0 ? void 0 : _e$detail.type) !== 'video-osd') return;
+    if (window.ede) startViewSession(window.ede, '');
     if ((_window$ede = window.ede) !== null && _window$ede !== void 0 && _window$ede.danmaku) {
-      window.ede.danmaku.clear();
+      var _window$ede$danmaku$d, _window$ede$danmaku;
+      (_window$ede$danmaku$d = (_window$ede$danmaku = window.ede.danmaku).destroy) === null || _window$ede$danmaku$d === void 0 || _window$ede$danmaku$d.call(_window$ede$danmaku);
+      window.ede.danmaku = null;
     }
+    if ((_window$ede2 = window.ede) !== null && _window$ede2 !== void 0 && _window$ede2.ob) {
+      window.ede.ob.disconnect();
+      window.ede.ob = null;
+    }
+    if ((_window$ede3 = window.ede) !== null && _window$ede3 !== void 0 && _window$ede3.listeningMedia) {
+      window.ede.listeningMedia.removeAttribute('ede_listening');
+      window.ede.listeningMedia = null;
+    }
+    clearPlaybackBindings(window.ede);
+    removeHeaderClock();
     var danmakuCtr = getById(eleIds.danmakuCtr);
     if (danmakuCtr) danmakuCtr.remove();
+    var danmakuWrapper = getById(eleIds.danmakuWrapper);
+    if (danmakuWrapper) danmakuWrapper.remove();
     videoTimeUpdateInterval(null, false);
+    var h5VideoAdapter = getById(eleIds.h5VideoAdapter);
+    if (h5VideoAdapter) h5VideoAdapter.remove();
     destroyAllInterval();
     lsSetItem(lsKeys.timelineOffset.id, lsKeys.timelineOffset.defaultValue);
   }
@@ -6812,20 +7164,26 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
    * 进入播放页时初始化
    */
   function onViewShow(e) {
-    var _e$detail2;
+    var _e$detail2, _e$detail4;
     console.log(e === null || e === void 0 ? void 0 : e.type, e);
     customeUrl.init();
+    if ((e === null || e === void 0 || (_e$detail2 = e.detail) === null || _e$detail2 === void 0 ? void 0 : _e$detail2.type) === 'video-osd') {
+      var _e$detail3;
+      if (!window.ede) window.ede = new EDE();
+      startViewSession(window.ede, (e === null || e === void 0 || (_e$detail3 = e.detail) === null || _e$detail3 === void 0 || (_e$detail3 = _e$detail3.params) === null || _e$detail3 === void 0 ? void 0 : _e$detail3.id) || '');
+    }
     if (lsGetItem(lsKeys.quickDebugOn.id) && !getById(eleIds.danmakuSettingBtnDebug)) {
       quickDebug();
     }
     addEasterEggListener();
-    if ((e === null || e === void 0 || (_e$detail2 = e.detail) === null || _e$detail2 === void 0 ? void 0 : _e$detail2.type) === 'video-osd') {
-      if (!window.ede) window.ede = new EDE();
+    if ((e === null || e === void 0 || (_e$detail4 = e.detail) === null || _e$detail4 === void 0 ? void 0 : _e$detail4.type) === 'video-osd') {
       if (!window.ede.appLogAspect && lsGetItem(lsKeys.consoleLogEnable.id)) {
         window.ede.appLogAspect = new AppLogAspect().init();
       }
       initUI();
-      initH5VideoAdapter();
+      initH5VideoAdapter().catch(function (error) {
+        return console.warn('H5 视频适配器初始化失败:', error);
+      });
       initListener({
         onPlaybackStart: onPlaybackStart,
         onPlaybackStop: onPlaybackStop,
@@ -6841,10 +7199,6 @@ Emby.importModule(p).then(function(f){window.Danmaku=f;}).catch(function(e){cons
         }
       });
       initCss();
-    }
-    if (window.ede) {
-      var _e$detail3;
-      window.ede.itemId = e !== null && e !== void 0 && (_e$detail3 = e.detail) !== null && _e$detail3 !== void 0 && (_e$detail3 = _e$detail3.params) !== null && _e$detail3 !== void 0 && _e$detail3.id ? e.detail.params.id : '';
     }
   }
 

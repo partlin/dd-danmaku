@@ -58,43 +58,72 @@ export function waitForElement(
 ) {
     let intervalId = null;
     let timeoutId = null;
+    let settled = false;
     const isSelector = typeof target === 'string';
     const elementMark = isSelector ? target : target.element?.tagName;
+    const registry = destroyIntervalIds && Array.isArray(destroyIntervalIds)
+        ? destroyIntervalIds
+        : null;
+    let resolvePromise;
+
+    const handle = {
+        cancel() {
+            if (settled) return;
+            settled = true;
+            clearInterval(intervalId);
+            clearTimeout(timeoutId);
+            removeHandle();
+            resolvePromise(null);
+        },
+    };
+
+    function removeHandle() {
+        if (!registry) return;
+        const index = registry.indexOf(handle);
+        if (index >= 0) registry.splice(index, 1);
+    }
+
+    function findElement() {
+        if (isSelector) return document.querySelector(target);
+        if (!target?.element) return null;
+        return target.needParent ? target.element.parentNode : target.element;
+    }
 
     const promise = new Promise((resolve, reject) => {
+        resolvePromise = resolve;
         function checkElement() {
-            let element = null;
-            if (isSelector) {
-                element = document.querySelector(target);
-            } else if (target?.element) {
-                if (target.needParent) {
-                    element = target.element.parentNode;
-                } else {
-                    element = target.element;
-                }
-            }
+            if (settled) return;
+            const element = findElement();
             if (element) {
+                settled = true;
                 clearInterval(intervalId);
                 clearTimeout(timeoutId);
-                if (typeof callback === 'function') {
-                    callback(element);
+                removeHandle();
+                try {
+                    if (typeof callback === 'function') callback(element);
+                    resolve(element);
+                } catch (error) {
+                    reject(error);
                 }
-                resolve(element);
             }
         }
 
+        if (registry) registry.push(handle);
+        checkElement();
+        if (settled) return;
         intervalId = setInterval(checkElement, interval);
-        if (destroyIntervalIds && Array.isArray(destroyIntervalIds)) {
-            destroyIntervalIds.push(intervalId);
-        }
 
         if (timeout > 0) {
             timeoutId = setTimeout(() => {
+                if (settled) return;
+                settled = true;
                 clearInterval(intervalId);
+                removeHandle();
                 reject(new Error(`Element [${elementMark}] not found within ${timeout}ms`));
             }, timeout);
         }
     });
 
+    promise.cancel = handle.cancel;
     return promise;
 }

@@ -32,25 +32,33 @@ export function videoTimeUpdateInterval(media, enable) {
  * 当播放页没有 <video> 时，创建虚拟 video 并同步 Native 播放器状态
  */
 export async function initH5VideoAdapter() {
+    const ede = window.ede;
+    const viewGeneration = ede?.viewGeneration;
+    const isCurrentView = () =>
+        ede && window.ede === ede && ede.viewGeneration === viewGeneration;
     let _media = document.querySelector(mediaQueryStr);
-    if (_media) {
-        if (_media.id === eleIds.h5VideoAdapter) {
-            videoTimeUpdateInterval(_media, true);
+    if (_media && _media.id !== eleIds.h5VideoAdapter) return;
+
+    if (!_media) {
+        console.log('播放页不存在 video 标签,适配器处理开始');
+        _media = document.createElement('video');
+        if (OS.isApple()) {
+            _media.src = '';
         }
+        _media.style.display = 'none';
+        _media.id = eleIds.h5VideoAdapter;
+        _media.classList.add('htmlvideoplayer', 'moveUpSubtitles');
+        document.body.prepend(_media);
+    }
+
+    await Promise.resolve(_media.play()).catch((error) => {
+        console.warn('虚拟 video 自动播放被拒绝，将继续同步播放器事件:', error);
+    });
+    if (!isCurrentView()) {
+        videoTimeUpdateInterval(_media, false);
+        _media.remove();
         return;
     }
-
-    console.log('播放页不存在 video 标签,适配器处理开始');
-    _media = document.createElement('video');
-    if (OS.isApple()) {
-        _media.src = '';
-    }
-    _media.style.display = 'none';
-    _media.id = eleIds.h5VideoAdapter;
-    _media.classList.add('htmlvideoplayer', 'moveUpSubtitles');
-    document.body.prepend(_media);
-
-    _media.play();
     videoTimeUpdateInterval(_media, true);
 
     if (typeof require !== 'function') {
@@ -58,30 +66,30 @@ export async function initH5VideoAdapter() {
         return;
     }
 
-    require(['playbackManager'], (playbackManager) => {
-        playbackEventsRefresh({
-            timeupdate: () => {
-                const realCurrentTime =
-                    playbackManager.currentTime(playbackManager.getCurrentPlayer()) / 1e7;
-                const mediaTime = _media.currentTime;
-                _media.currentTime = realCurrentTime;
-                const embyPlaybackRate =
-                    playbackManager.getPlayerState?.()?.PlayState?.PlaybackRate;
-                _media.playbackRate = embyPlaybackRate ? embyPlaybackRate : 1;
-                if (Math.abs(mediaTime - realCurrentTime) > 2) {
-                    _media.dispatchEvent(new Event('seeking'));
-                    console.warn('seeking', realCurrentTime, mediaTime);
-                }
-                if (lsGetItem(lsKeys.debugH5VideoAdapterEnable.id)) {
-                    console.warn(
-                        `${eleIds.h5VideoAdapter}, currentTime: ${_media.currentTime}, playbackRate: ${_media.playbackRate}`
-                    );
-                }
-            },
-        });
-    });
-
-    playbackEventsRefresh({
+    const [playbackManager] = await require(['playbackManager']);
+    if (!isCurrentView()) {
+        videoTimeUpdateInterval(_media, false);
+        _media.remove();
+        return;
+    }
+    await playbackEventsRefresh({
+        timeupdate: () => {
+            const realCurrentTime =
+                playbackManager.currentTime(playbackManager.getCurrentPlayer()) / 1e7;
+            const mediaTime = _media.currentTime;
+            _media.currentTime = realCurrentTime;
+            const embyPlaybackRate = playbackManager.getPlayerState?.()?.PlayState?.PlaybackRate;
+            _media.playbackRate = embyPlaybackRate || 1;
+            if (Math.abs(mediaTime - realCurrentTime) > 2) {
+                _media.dispatchEvent(new Event('seeking'));
+                console.warn('seeking', realCurrentTime, mediaTime);
+            }
+            if (lsGetItem(lsKeys.debugH5VideoAdapterEnable.id)) {
+                console.warn(
+                    `${eleIds.h5VideoAdapter}, currentTime: ${_media.currentTime}, playbackRate: ${_media.playbackRate}`
+                );
+            }
+        },
         pause: () => {
             console.warn('pause');
             _media.dispatchEvent(new Event('pause'));

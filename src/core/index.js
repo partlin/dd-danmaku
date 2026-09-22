@@ -5,6 +5,16 @@
 export { EDE } from './EDE.js';
 export { AppLogAspect } from './AppLogAspect.js';
 export {
+    startViewSession,
+    syncPlaybackItemSession,
+    beginLoadSession,
+    isLoadSessionCurrent,
+    assertLoadSession,
+    finishLoadSession,
+    cancelActiveLoad,
+    clearPlaybackBindings,
+} from './lifecycle.js';
+export {
     lsSetItem,
     lsCheckOld,
     lsCheckSet,
@@ -19,7 +29,10 @@ export {
 export function destroyAllInterval(ede) {
     const target = ede ?? window.ede;
     if (target?.destroyIntervalIds) {
-        target.destroyIntervalIds.forEach((id) => clearInterval(id));
+        [...target.destroyIntervalIds].forEach((handle) => {
+            if (typeof handle?.cancel === 'function') handle.cancel();
+            else clearInterval(handle);
+        });
         target.destroyIntervalIds = [];
     }
 }

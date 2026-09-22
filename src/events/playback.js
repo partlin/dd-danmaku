@@ -9,6 +9,7 @@ import { putBangumiEpStatus } from '../bangumi/api.js';
 import { embyToast } from '../ui/dialog.js';
 import { removeHeaderClock } from './video-osd.js';
 import { danmakuAutoFilterCancel } from '../danmaku/filter.js';
+import { syncPlaybackItemSession } from '../core/lifecycle.js';
 
 /**
  * 播放停止时按百分比处理（Bangumi 提交等）
@@ -48,6 +49,7 @@ export function onPlaybackStopPct(e, state) {
  */
 export function onPlaybackStart(e, state) {
     console.log(e?.type);
+    syncPlaybackItemSession(window.ede, state);
     loadDanmaku(LOAD_TYPE.INIT);
 }
 

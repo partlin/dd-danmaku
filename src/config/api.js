@@ -243,13 +243,25 @@ export function lsGetItem(id) {
         return defaultValue;
     }
     if (Array.isArray(defaultValue) || (typeof defaultValue === 'object' && defaultValue !== null)) {
-        return JSON.parse(item);
+        try {
+            const parsed = JSON.parse(item);
+            if (Array.isArray(defaultValue) && !Array.isArray(parsed)) throw new TypeError('Expected array');
+            return parsed;
+        } catch (error) {
+            console.warn(`[设置] ${id} 内容损坏，已恢复默认值:`, error);
+            localStorage.removeItem(id);
+            return defaultValue;
+        }
     }
     if (typeof defaultValue === 'boolean') {
         return item === 'true';
     }
     if (typeof defaultValue === 'number') {
-        return parseFloat(item);
+        const parsed = parseFloat(item);
+        if (Number.isFinite(parsed)) return parsed;
+        console.warn(`[设置] ${id} 不是有效数字，已恢复默认值`);
+        localStorage.removeItem(id);
+        return defaultValue;
     }
     return item;
 }

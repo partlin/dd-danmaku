@@ -5,7 +5,7 @@ const targets =
         ? { android: '7' }
         : { android: '9', chrome: '73' };
 
-module.exports = {
+export default {
     presets: [
         [
             '@babel/preset-env',

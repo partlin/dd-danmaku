@@ -24,13 +24,13 @@ import {
  * @param {string} prefix - API prefix
  * @returns {Promise<object|null>}
  */
-export async function autoFailback(animeName, episodeIndex, seriesOrMovieId, prefix) {
-    const rvt = await movieAutoFailback(animeName, episodeIndex, prefix);
+export async function autoFailback(animeName, episodeIndex, seriesOrMovieId, prefix, signal) {
+    const rvt = await movieAutoFailback(animeName, episodeIndex, prefix, signal);
     if (rvt) return rvt;
 
     const seriesOrMovieInfo = await ApiClient.getItem(ApiClient.getCurrentUserId(), seriesOrMovieId);
     const animeOriginalTitle = seriesOrMovieInfo?.OriginalTitle;
-    return oriTitleAutoFailback(animeName, episodeIndex, animeOriginalTitle, prefix);
+    return oriTitleAutoFailback(animeName, episodeIndex, animeOriginalTitle, prefix, signal);
 }
 
 /**
@@ -40,10 +40,10 @@ export async function autoFailback(animeName, episodeIndex, seriesOrMovieId, pre
  * @param {string} prefix
  * @returns {Promise<object|null>}
  */
-export async function oriTitleAutoFailback(animeName, episodeIndex, animeOriginalTitle, prefix) {
+export async function oriTitleAutoFailback(animeName, episodeIndex, animeOriginalTitle, prefix, signal) {
     if (!animeOriginalTitle || !prefix) return null;
     console.log(`标题名: ${animeName},自动匹配未查询到结果,将使用原标题名,重试一次`);
-    const animaInfo = await fetchSearchEpisodes(animeOriginalTitle, episodeIndex, prefix);
+    const animaInfo = await fetchSearchEpisodes(animeOriginalTitle, episodeIndex, prefix, signal);
     if (!animaInfo?.animes?.length) return null;
     console.log(`使用原标题名: ${animeOriginalTitle},自动匹配成功`);
     return { animeName, animaInfo, animeOriginalTitle, expectedEpisodeNumber: episodeIndex };
@@ -55,10 +55,10 @@ export async function oriTitleAutoFailback(animeName, episodeIndex, animeOrigina
  * @param {string} prefix
  * @returns {Promise<object|null>}
  */
-export async function movieAutoFailback(animeName, episodeIndex, prefix) {
+export async function movieAutoFailback(animeName, episodeIndex, prefix, signal) {
     if (!prefix) return null;
     console.log(`自动匹配未查询到结果,可能为非番剧,将移除章节过滤,重试一次`);
-    const animaInfo = await fetchSearchEpisodes(animeName, null, prefix);
+    const animaInfo = await fetchSearchEpisodes(animeName, null, prefix, signal);
     if (!animaInfo?.animes?.length) return null;
     console.log(`移除章节过滤,自动匹配成功,转换为目标章节索引 0`);
     const anime = animaInfo.animes[0];

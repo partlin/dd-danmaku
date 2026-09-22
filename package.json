@@ -2,16 +2,17 @@
   "name": "dd-danmaku",
   "version": "1.0.0",
   "description": "![截图](https://raw.githubusercontent.com/chen3861229/dd-danmaku/main/img/newui01.png)",
+  "type": "module",
   "main": "cf_worker.js",
   "directories": {
     "doc": "docs"
   },
   "devDependencies": {
-    "@babel/cli": "^7.28.6",
-    "@babel/core": "^7.28.6",
-    "@babel/preset-env": "^7.28.6",
-    "@rollup/plugin-babel": "^7.0.0",
-    "@rollup/plugin-commonjs": "^29.0.2",
+    "@babel/cli": "^7.29.7",
+    "@babel/core": "^7.29.7",
+    "@babel/preset-env": "^7.29.7",
+    "@rollup/plugin-babel": "^7.1.0",
+    "@rollup/plugin-commonjs": "^29.0.3",
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@rollup/plugin-terser": "^1.0.0",
     "cross-env": "^10.1.0",
@@ -33,6 +34,9 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "dependencies": {
+    "spark-md5": "^3.0.2"
+  },
   "bugs": {
     "url": "https://github.com/chen3861229/dd-danmaku/issues"
   },

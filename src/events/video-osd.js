@@ -8,7 +8,6 @@ import { eleIds } from '../config/ele-ids.js';
 import { classes } from '../config/icons.js';
 import { mediaContainerQueryStr } from '../config/constants.js';
 import { buildProgressBarChart } from '../danmaku/chart.js';
-import { destroyAllInterval } from '../core/index.js';
 import { getDanmakuComments } from '../config/options.js';
 
 /**
@@ -50,6 +49,10 @@ export function addHeaderClock() {
     let headerClockEle = getById('headerClock');
     if (!warpper) return;
     if (headerClockEle) headerClockEle.remove();
+    if (window.ede?.clockIntervalId) {
+        clearInterval(window.ede.clockIntervalId);
+        window.ede.clockIntervalId = null;
+    }
 
     const clockElement = document.createElement('div');
     clockElement.id = 'headerClock';
@@ -64,15 +67,16 @@ export function addHeaderClock() {
     }
     updateClock();
     const intervalId = setInterval(updateClock, 1000);
-    if (window.ede?.destroyIntervalIds) {
-        window.ede.destroyIntervalIds.push(intervalId);
-    }
+    if (window.ede) window.ede.clockIntervalId = intervalId;
 }
 
 export function removeHeaderClock() {
     const headerClockEle = getById('headerClock');
     if (headerClockEle) headerClockEle.remove();
-    destroyAllInterval();
+    if (window.ede?.clockIntervalId) {
+        clearInterval(window.ede.clockIntervalId);
+        window.ede.clockIntervalId = null;
+    }
 }
 
 export function onVideoOsdShow(e) {

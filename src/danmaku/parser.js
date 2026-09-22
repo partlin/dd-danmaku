@@ -37,12 +37,22 @@ export function danmakuParser($obj) {
 
     return $obj
         .map(($comment) => {
-            const p = $comment.p;
+            const p = $comment?.p;
+            if (typeof p !== 'string' || typeof $comment?.m !== 'string') {
+                console.warn('[弹幕解析] 跳过格式损坏的记录:', $comment);
+                return null;
+            }
             const values = p.split(',');
+            if (values.length < 4 || !Number.isFinite(Number(values[0]))) {
+                console.warn('[弹幕解析] 跳过参数损坏的记录:', $comment);
+                return null;
+            }
             const mode = { 6: 'ltr', 1: 'rtl', 5: 'top', 4: 'bottom' }[values[1]];
             if (!mode) return null;
 
-            const baseColor = Number(values[2]).toString(16).padStart(6, '0');
+            const colorNumber = Number(values[2]);
+            if (!Number.isFinite(colorNumber)) return null;
+            const baseColor = colorNumber.toString(16).padStart(6, '0');
             const color = `${baseColor}${fontOpacity}`;
             const shadowColor = baseColor === '000000' ? `#ffffff${fontOpacity}` : `#000000${fontOpacity}`;
             const sourceUidMatches = values[3]?.match(sourceUidReg);
